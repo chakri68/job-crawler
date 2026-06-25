@@ -1,0 +1,32 @@
+name: hourly-job-watch
+
+on:
+  schedule:
+    - cron: "0 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Run watcher
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: node src/cli.ts run
+
+      - name: Commit state
+        run: |
+          git config user.name "job-cron-bot"
+          git config user.email "actions@github.com"
+          git add -f data/jobs.db
+          git diff --quiet --cached || git commit -m "chore: update seen-jobs state [skip ci]"
+          git push

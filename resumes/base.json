@@ -1,0 +1,161 @@
+{
+  "personal": {
+    "name": "CHAKRADHAR REDDY DEVIREDDY",
+    "contact": {
+      "github": {
+        "text": "GitHub",
+        "url": "https://github.com/chakri68"
+      },
+      "linkedin": {
+        "text": "LinkedIn",
+        "url": "https://www.linkedin.com/in/chakradhar-reddy-d"
+      },
+      "email": {
+        "text": "chakridevireddy69@gmail.com",
+        "url": "mailto:chakridevireddy69@gmail.com"
+      },
+      "phone": {
+        "text": "+91 63037 08424",
+        "url": "tel:+916303708424"
+      }
+    }
+  },
+  "summary": {
+    "text": "Backend-focused Software Engineer building Go and TypeScript systems across healthcare and logistics, with experience spanning internships and full-time engineering at Zomato and Even Healthcare. Strong in distributed systems, PostgreSQL, AWS, Kafka, Redis, and observability, with a bias toward reliable, developer-first backend tooling."
+  },
+  "skills": {
+    "categories": [
+      {
+        "title": "Languages",
+        "items": "Go, TypeScript, JavaScript, Java, Python, SQL, Bash"
+      },
+      {
+        "title": "Backend",
+        "items": "Node.js, Express, NestJS, gRPC, REST, GraphQL"
+      },
+      {
+        "title": "Frontend",
+        "items": "React, Next.js, Redux Toolkit"
+      },
+      {
+        "title": "Databases",
+        "items": "PostgreSQL, MySQL, MSSQL, Prisma ORM, Strapi CMS, Firestore"
+      },
+      {
+        "title": "Cloud & DevOps",
+        "items": "AWS, GCP, Docker, Kubernetes, Redis, Kafka, Nginx, Bazel, Gerrit"
+      }
+    ]
+  },
+  "experience": [
+    {
+      "company": "Even Healthcare",
+      "title": "Software Development Engineer",
+      "location": "Bengaluru",
+      "period": "Oct 2025 - Present",
+      "achievements": [
+        "Owned backend for Even Infinite's Hospital Pass, simplifying member access to partner-hospital services and lifting pass engagement by 65%+.",
+        "Designed an AI calling framework for clinical follow-ups — LLM-based report summarization, care-manager suggestions, and automated call flows — cutting manual follow-up effort by ~40%.",
+        "Built a reusable onboarding package for insurance providers with automated CI/CD, cutting provider integration time from 6 weeks to 2.",
+        "Fixed recurring document re-upload failures across post-hospitalization workflows, restoring reliable generation of 300+ weekly forms for care managers."
+      ]
+    },
+    {
+      "company": "Zomato",
+      "title": "Software Development Engineer",
+      "location": "Gurugram",
+      "period": "Jan 2025 - Oct 2025",
+      "positions": [
+        {
+          "title": "Software Development Engineer",
+          "period": "Jul 2025 - Oct 2025",
+          "achievements": [
+            "Built an automated vehicle onboarding flow with plate detection and dynamic step routing across a 15-screen journey, cutting manual review effort by 60% and onboarding errors by 80%.",
+            "Redesigned delayed-order ticketing with automated escalation states and operator actions, reducing cancellation-prone cases by 80%.",
+            "Built a Python sync pipeline for ~1M support tickets, automating recurring ops workflows and removing ~95% of manual sync work.",
+            "Migrated logistics map tooling to Google Maps and optimized usage patterns, lowering map-related operating costs by 25%."
+          ]
+        },
+        {
+          "title": "Software Development Intern",
+          "period": "Jan 2025 - Jun 2025",
+          "achievements": [
+            "Built a production-safe Go SDK to stream multi-GB ZIP archives directly to S3, reducing transfer latency by 65% and peak memory usage by 50%.",
+            "Developed a GPS ingestion service handling ~50k location events/sec with live monitoring dashboards, improving ETA prediction accuracy by 12%.",
+            "Refactored service-to-service RPC flows with goroutine fan-out and gRPC request batching, cutting P95 latency by ~95% at ~2k TPS by collapsing chatty per-item calls into batched requests."
+          ]
+        }
+      ]
+    },
+    {
+      "company": "Shinpo Engineering Pvt. Ltd.",
+      "title": "Backend Developer Intern",
+      "location": "Remote",
+      "period": "Dec 2023 - Apr 2024",
+      "achievements": [
+        "Scaled a Strapi-based ERM platform to ~1k RPS by adding in-memory caching, optimizing SQL queries, and restructuring backend routes."
+      ]
+    },
+    {
+      "company": "WCARL — IIIT Lucknow",
+      "title": "Full-Stack Web Developer Intern",
+      "location": "Lucknow",
+      "period": "Oct 2022 - Mar 2023",
+      "achievements": [
+        "Developed backend and dashboard flows for a Next.js platform used by the UP Commercial Tax Department, with automated PDF-based discrepancy tax report generation that cut manual effort by 60%."
+      ]
+    }
+  ],
+  "projects": [
+    {
+      "name": "JScratch",
+      "description": "Published VS Code extension for writing and testing TypeScript-based ETL/data transformation scripts inside the editor.",
+      "url": "https://github.com/chakri68/jscratch"
+    },
+    {
+      "name": "codeCollab",
+      "description": "Real-time collaborative IDE built with Next.js, WebSockets, and CodeMirror, with conflict-free syncing for multi-user editing.",
+      "url": "https://github.com/chakri68/codeCollab"
+    },
+    {
+      "name": "systems-node",
+      "description": "Low-level Node.js systems playground implementing worker-thread multithreading and concurrency primitives in TypeScript.",
+      "url": "https://github.com/chakri68/systems-node"
+    },
+    {
+      "name": "life-sim",
+      "description": "Framework-free TypeScript cellular-automata engine with a pluggable simulator architecture (totalistic, agent-based ecosystem, Gray-Scott reaction-diffusion, custom rules) over a toroidal grid, with a Canvas2D renderer in ~17KB gzipped.",
+      "url": "https://github.com/chakri68/life-sim"
+    }
+  ],
+  "education": {
+    "institution": "Indian Institute of Information Technology, Lucknow",
+    "degree": "B.Tech. in Computer Science",
+    "gpa": "9.21/10",
+    "period": "Dec 2021 - Jun 2025",
+    "location": "Lucknow, India"
+  },
+  "achievements": [
+    {
+      "title": "Codeforces Expert",
+      "description": "Max rating 1667 • Top 6% worldwide • 2024"
+    },
+    {
+      "title": "Amazon HackOn S3",
+      "description": "Top 50 of 5,000+ teams • 2023"
+    },
+    {
+      "title": "WCARL Drone Contributor",
+      "description": "Contributed to a drone research project featured in The Times of India • 2023"
+    },
+    {
+      "title": "Executive Member, GDSC",
+      "description": "Organized 15+ tech events and mentored 50+ juniors • 2022-24"
+    }
+  ],
+  "keywords": "Go, TypeScript, JavaScript, Node.js, NestJS, Express, React, Next.js, SvelteKit, AWS, GCP, PostgreSQL, MySQL, Redis, Kafka, gRPC, GraphQL, Docker, Kubernetes, Strapi, Sanity, Distributed Systems, Microservices, Observability, CI/CD, Backend Engineering",
+  "footer": {
+    "copyright": "© 2026 Chakradhar Reddy Devireddy",
+    "lastUpdated": "Jun 2026"
+  }
+}

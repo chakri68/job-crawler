@@ -1,0 +1,89 @@
+{
+  "notifier": {
+    "type": "discord",
+    "webhookUrlEnv": "DISCORD_WEBHOOK_URL"
+  },
+  "failStreakAlert": 3,
+  "filters": {
+    "includeKeywords": [
+      "software engineer",
+      "application engineer",
+      "backend",
+      "frontend",
+      "full stack",
+      "platform engineer",
+      "new grad",
+      "early career",
+      "university graduate",
+      "sde",
+      "systems engineer",
+      "site reliability engineer"
+    ],
+    "locationKeywords": [
+      "india",
+      "bengaluru",
+      "bangalore",
+      "hyderabad",
+      "pune",
+      "gurugram",
+      "noida",
+      "remote"
+    ],
+    "excludeKeywords": [
+      "senior",
+      "staff",
+      "principal",
+      "manager",
+      "director",
+      "sales",
+      "support",
+      "consultant",
+      "customer success",
+      "marketing",
+      "recruiter"
+    ]
+  },
+  "sources": [
+    {
+      "provider": "greenhouse",
+      "board": "stripe",
+      "company": "Stripe",
+      "enabled": true
+    },
+    {
+      "provider": "greenhouse",
+      "board": "databricks",
+      "company": "Databricks",
+      "enabled": true
+    },
+    {
+      "provider": "lever",
+      "board": "rippling",
+      "company": "Rippling",
+      "enabled": false
+    },
+    {
+      "provider": "custom",
+      "customKey": "google",
+      "company": "Google",
+      "enabled": true,
+      "query": {
+        "location": "India",
+        "q": "software engineer",
+        "maxPages": "3"
+      }
+    },
+    {
+      "provider": "custom",
+      "customKey": "microsoft",
+      "company": "Microsoft",
+      "enabled": true,
+      "query": {
+        "lc": "India",
+        "q": "software engineer",
+        "pgSz": "20",
+        "maxPages": "3"
+      }
+    }
+  ]
+}

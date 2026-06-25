@@ -1,0 +1,150 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "job-cron config",
+  "description": "Configuration for the job-cron career-page watcher.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["notifier", "failStreakAlert", "filters", "sources"],
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "Optional path/URL to this schema."
+    },
+    "notifier": {
+      "type": "object",
+      "description": "Where new-job alerts are sent.",
+      "additionalProperties": false,
+      "required": ["type"],
+      "properties": {
+        "type": {
+          "description": "Alert channel. \"console\" just logs; \"discord\" POSTs to a webhook.",
+          "enum": ["discord", "console"]
+        },
+        "webhookUrlEnv": {
+          "type": "string",
+          "description": "Name of the environment variable holding the webhook URL (used when type is \"discord\"). e.g. DISCORD_WEBHOOK_URL",
+          "examples": ["DISCORD_WEBHOOK_URL"]
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "type": { "const": "discord" } } },
+          "then": { "required": ["webhookUrlEnv"] }
+        }
+      ]
+    },
+    "failStreakAlert": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Send a warning alert after a source fails this many consecutive runs.",
+      "default": 3
+    },
+    "filters": {
+      "type": "object",
+      "description": "Keyword filters applied to every fetched job (case-insensitive substring match).",
+      "additionalProperties": false,
+      "required": ["includeKeywords", "locationKeywords", "excludeKeywords"],
+      "properties": {
+        "includeKeywords": {
+          "type": "array",
+          "description": "Job is kept only if its TITLE contains at least one of these.",
+          "items": { "type": "string" },
+          "examples": [["software engineer", "backend", "new grad"]]
+        },
+        "locationKeywords": {
+          "type": "array",
+          "description": "Job is kept only if its location (or title) contains at least one of these. Empty array disables the location filter.",
+          "items": { "type": "string" },
+          "examples": [["india", "bengaluru", "remote"]]
+        },
+        "excludeKeywords": {
+          "type": "array",
+          "description": "Job is DROPPED if its TITLE contains any of these (takes precedence over includes).",
+          "items": { "type": "string" },
+          "examples": [["senior", "staff", "manager", "sales"]]
+        }
+      }
+    },
+    "sources": {
+      "type": "array",
+      "description": "Career sources to poll.",
+      "items": { "$ref": "#/definitions/source" }
+    }
+  },
+  "definitions": {
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "company", "enabled"],
+      "properties": {
+        "provider": {
+          "description": "Fetcher type. ATS providers (greenhouse/lever/ashby) need a \"board\"; \"custom\" needs a \"customKey\".",
+          "enum": ["greenhouse", "lever", "ashby", "custom"]
+        },
+        "board": {
+          "type": "string",
+          "description": "Board slug for ATS providers, e.g. \"stripe\" → boards-api.greenhouse.io/v1/boards/stripe/jobs.",
+          "examples": ["stripe", "databricks", "rippling"]
+        },
+        "company": {
+          "type": "string",
+          "description": "Display name used in alerts and output filenames."
+        },
+        "enabled": {
+          "type": "boolean",
+          "description": "Whether this source is polled."
+        },
+        "customKey": {
+          "description": "For provider \"custom\": which built-in custom fetcher to use.",
+          "type": "string",
+          "examples": ["google", "microsoft"]
+        },
+        "query": {
+          "type": "object",
+          "description": "For provider \"custom\": query params passed to the source. All values are strings.",
+          "additionalProperties": { "type": "string" },
+          "properties": {
+            "q": {
+              "type": "string",
+              "description": "Keyword/search term (google + microsoft)."
+            },
+            "location": {
+              "type": "string",
+              "description": "Location filter for the Google results page (e.g. \"India\")."
+            },
+            "lc": {
+              "type": "string",
+              "description": "Location/country filter for Microsoft search (e.g. \"India\")."
+            },
+            "pgSz": {
+              "type": "string",
+              "description": "Microsoft page size per request (e.g. \"20\")."
+            },
+            "maxPages": {
+              "type": "string",
+              "description": "Max pages to page through (google + microsoft). e.g. \"3\"."
+            }
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "provider": { "enum": ["greenhouse", "lever", "ashby"] } }
+          },
+          "then": {
+            "required": ["board"],
+            "not": { "required": ["customKey"] }
+          }
+        },
+        {
+          "if": { "properties": { "provider": { "const": "custom" } } },
+          "then": {
+            "required": ["customKey"],
+            "not": { "required": ["board"] }
+          }
+        }
+      ]
+    }
+  }
+}
