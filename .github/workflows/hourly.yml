@@ -23,6 +23,9 @@ jobs:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
         run: node src/cli.ts run
 
+      - name: Purge stale jobs (gone from listings 7d+, not looked at)
+        run: node src/cli.ts purge --days 7
+
       - name: Commit state
         run: |
           git config user.name "job-cron-bot"

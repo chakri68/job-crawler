@@ -168,14 +168,16 @@ function renderPdf(jsonPath: string, pdfPath: string): Promise<void> {
 export async function tailor(idOrUrl: string): Promise<void> {
   const store = new Store();
   const job = store.findJob(idOrUrl);
-  store.close();
   if (!job) {
+    store.close();
     log.error(
       `No stored job for "${idOrUrl}". Run \`job-cron list\` to see ids.`,
     );
     process.exitCode = 1;
     return;
   }
+  store.markLookedAt(job.id); // engaging with a job exempts it from purge
+  store.close();
   log.info(`Tailoring for ${job.company} — ${job.title}`);
 
   // Lazily fetch the full job description from the originating source.

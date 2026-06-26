@@ -17,19 +17,28 @@
       "required": ["type"],
       "properties": {
         "type": {
-          "description": "Alert channel. \"console\" just logs; \"discord\" POSTs to a webhook.",
-          "enum": ["discord", "console"]
+          "description": "Alert channel. \"console\" just logs; \"discord\" POSTs to a webhook; \"telegram\" sends via the Bot API.",
+          "enum": ["discord", "telegram", "console"]
         },
         "webhookUrlEnv": {
           "type": "string",
-          "description": "Name of the environment variable holding the webhook URL (used when type is \"discord\"). e.g. DISCORD_WEBHOOK_URL",
-          "examples": ["DISCORD_WEBHOOK_URL"]
+          "description": "Name of the environment variable holding the webhook URL (for \"discord\") or the bot token (for \"telegram\"). e.g. DISCORD_WEBHOOK_URL or TELEGRAM_BOT_TOKEN",
+          "examples": ["DISCORD_WEBHOOK_URL", "TELEGRAM_BOT_TOKEN"]
+        },
+        "chatIdEnv": {
+          "type": "string",
+          "description": "Name of the environment variable holding the target chat id (used when type is \"telegram\"). e.g. TELEGRAM_CHAT_ID",
+          "examples": ["TELEGRAM_CHAT_ID"]
         }
       },
       "allOf": [
         {
           "if": { "properties": { "type": { "const": "discord" } } },
           "then": { "required": ["webhookUrlEnv"] }
+        },
+        {
+          "if": { "properties": { "type": { "const": "telegram" } } },
+          "then": { "required": ["webhookUrlEnv", "chatIdEnv"] }
         }
       ]
     },

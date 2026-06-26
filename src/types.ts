@@ -24,9 +24,11 @@ export type Filters = {
 };
 
 export type NotifierConfig = {
-  type: "discord" | "console";
-  /** name of the env var holding the webhook URL (for discord) */
+  type: "discord" | "telegram" | "console";
+  /** name of the env var holding the webhook URL (for discord) or bot token (for telegram) */
   webhookUrlEnv?: string;
+  /** name of the env var holding the target chat id (for telegram) */
+  chatIdEnv?: string;
 };
 
 export type SourceConfig = {
@@ -51,6 +53,15 @@ export type Config = {
   failStreakAlert: number;
 };
 
+/** A stored source-health row (snake_case mirrors the SQLite schema). */
+export type SourceStateRow = {
+  source: string;
+  seeded: number;
+  last_run: string | null;
+  last_ok: string | null;
+  fail_streak: number;
+};
+
 /** A stored job row (snake_case mirrors the SQLite schema). */
 export type JobRow = {
   id: string;
@@ -63,4 +74,6 @@ export type JobRow = {
   first_seen: string;
   last_seen: string;
   notified: number;
+  looked_at: number;
+  dismissed: number;
 };

@@ -12,13 +12,21 @@
   },
   "scripts": {
     "run": "node src/cli.ts run",
+    "tui": "node src/cli.ts tui",
+    "status": "node src/cli.ts status",
     "list": "node src/cli.ts list",
     "sources": "node src/cli.ts sources",
     "tailor": "node src/cli.ts tailor",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
+    "@types/blessed": "^0.1.27",
     "@types/node": "^24.0.0",
     "typescript": "^5.6.0"
+  },
+  "dependencies": {
+    "blessed": "^0.1.81",
+    "chalk": "^5.6.2",
+    "cli-table3": "^0.6.5"
   }
 }

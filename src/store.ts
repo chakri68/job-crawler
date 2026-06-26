@@ -2,7 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 import { mkdirSync } from "node:fs";
 import { projectPath } from "./config.ts";
 import { jobKey, nowIso } from "./util.ts";
-import type { JobPosting, JobRow } from "./types.ts";
+import type { JobPosting, JobRow, SourceStateRow } from "./types.ts";
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS jobs (
@@ -15,7 +15,9 @@ CREATE TABLE IF NOT EXISTS jobs (
   posted_at   TEXT,
   first_seen  TEXT NOT NULL,
   last_seen   TEXT NOT NULL,
-  notified    INTEGER NOT NULL DEFAULT 0
+  notified    INTEGER NOT NULL DEFAULT 0,
+  looked_at   INTEGER NOT NULL DEFAULT 0,
+  dismissed   INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS source_state (
   source      TEXT PRIMARY KEY,
@@ -33,6 +35,18 @@ export class Store {
     mkdirSync(projectPath("data"), { recursive: true });
     this.db = new DatabaseSync(dbPath);
     this.db.exec(SCHEMA);
+    this.migrate();
+  }
+
+  /** Add columns introduced after a DB was first created. */
+  private migrate(): void {
+    const cols = this.db.prepare("PRAGMA table_info(jobs)").all() as { name: string }[];
+    if (!cols.some((c) => c.name === "looked_at")) {
+      this.db.exec("ALTER TABLE jobs ADD COLUMN looked_at INTEGER NOT NULL DEFAULT 0");
+    }
+    if (!cols.some((c) => c.name === "dismissed")) {
+      this.db.exec("ALTER TABLE jobs ADD COLUMN dismissed INTEGER NOT NULL DEFAULT 0");
+    }
   }
 
   isSeeded(source: string): boolean {
@@ -90,6 +104,42 @@ export class Store {
     for (const id of ids) stmt.run(id);
   }
 
+  /** Mark a job as engaged with (you ran `tailor` on it) — exempts it from purge. */
+  markLookedAt(id: string): void {
+    this.db.prepare("UPDATE jobs SET looked_at = 1 WHERE id = ?").run(id);
+  }
+
+  /**
+   * Jobs eligible for purge: not looked at, and not seen in any poll since
+   * `cutoffIso` (i.e. they've dropped off the career page, so deleting them
+   * won't cause a re-alert). Oldest first.
+   */
+  listPurgeable(cutoffIso: string): JobRow[] {
+    return this.db
+      .prepare(
+        "SELECT * FROM jobs WHERE looked_at = 0 AND last_seen < ? ORDER BY last_seen ASC",
+      )
+      .all(cutoffIso) as JobRow[];
+  }
+
+  /** Delete purgeable jobs (see listPurgeable); returns how many were removed. */
+  purgeJobs(cutoffIso: string): number {
+    const res = this.db
+      .prepare("DELETE FROM jobs WHERE looked_at = 0 AND last_seen < ?")
+      .run(cutoffIso);
+    return Number(res.changes);
+  }
+
+  /**
+   * Soft-delete a job: keep the row as a tombstone (so future polls treat it as
+   * already-seen and never re-alert) but hide it from listings. Returns true if
+   * a row was updated.
+   */
+  dismissJob(id: string): boolean {
+    const res = this.db.prepare("UPDATE jobs SET dismissed = 1 WHERE id = ?").run(id);
+    return Number(res.changes) > 0;
+  }
+
   recordOk(source: string): void {
     const now = nowIso();
     this.db
@@ -133,8 +183,29 @@ export class Store {
 
   listJobs(limit = 50): JobRow[] {
     return this.db
-      .prepare("SELECT * FROM jobs ORDER BY first_seen DESC LIMIT ?")
+      .prepare("SELECT * FROM jobs WHERE dismissed = 0 ORDER BY first_seen DESC LIMIT ?")
       .all(limit) as JobRow[];
+  }
+
+  /** All source-health rows, most recently run first. */
+  listSourceState(): SourceStateRow[] {
+    return this.db
+      .prepare("SELECT * FROM source_state ORDER BY last_run DESC")
+      .all() as SourceStateRow[];
+  }
+
+  /** Headline counts for the status dashboard. */
+  stats(sinceIso: string): { total: number; notified: number; recent: number } {
+    const total = this.db
+      .prepare("SELECT COUNT(*) c FROM jobs WHERE dismissed = 0")
+      .get() as { c: number };
+    const notified = this.db
+      .prepare("SELECT COUNT(*) c FROM jobs WHERE notified = 1 AND dismissed = 0")
+      .get() as { c: number };
+    const recent = this.db
+      .prepare("SELECT COUNT(*) c FROM jobs WHERE first_seen >= ? AND dismissed = 0")
+      .get(sinceIso) as { c: number };
+    return { total: total.c, notified: notified.c, recent: recent.c };
   }
 
   close(): void {
