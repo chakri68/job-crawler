@@ -164,13 +164,24 @@ self-cleans.
 Most companies use an ATS with a public JSON API. Add a config entry — usually no code:
 
 ```json
-{ "provider": "greenhouse", "board": "stripe", "company": "Stripe", "enabled": true }
-{ "provider": "lever",      "board": "rippling", "company": "Rippling", "enabled": true }
-{ "provider": "ashby",      "board": "ramp",    "company": "Ramp",    "enabled": true }
+{ "provider": "greenhouse",      "board": "stripe",   "company": "Stripe",   "enabled": true }
+{ "provider": "lever",           "board": "rippling", "company": "Rippling", "enabled": true }
+{ "provider": "ashby",           "board": "ramp",     "company": "Ramp",     "enabled": true }
+{ "provider": "smartrecruiters", "board": "Visa",     "company": "Visa",     "enabled": true }
 ```
 
-In-house sources use the `CUSTOM` registry in `src/fetchers/index.ts`. **Google**
-and **Microsoft** are already built in; pass query params via `query`:
+**Workday** is in-house but ubiquitous, so it's a generic provider too. A board
+is a `(tenant, datacenter, site)` triple — `board` is the tenant; pass the rest
+via `query`. Find them in any Workday careers URL
+(`https://{tenant}.{dc}.myworkdayjobs.com/{site}`):
+
+```json
+{ "provider": "workday", "board": "nvidia", "company": "NVIDIA", "enabled": true,
+  "query": { "dc": "wd5", "site": "NVIDIAExternalCareerSite", "maxPages": "5" } }
+```
+
+In-house sources use the `CUSTOM` registry in `src/fetchers/index.ts`. **Google**,
+**Microsoft**, and **Amazon** are already built in; pass query params via `query`:
 
 ```json
 { "provider": "custom", "customKey": "google",
@@ -180,11 +191,27 @@ and **Microsoft** are already built in; pass query params via `query`:
 { "provider": "custom", "customKey": "microsoft",
   "company": "Microsoft", "enabled": true,
   "query": { "lc": "India", "q": "software engineer", "pgSz": "20", "maxPages": "3" } }
+
+{ "provider": "custom", "customKey": "amazon",
+  "company": "Amazon", "enabled": true,
+  "query": { "loc_query": "India", "base_query": "software engineer", "maxPages": "3" } }
+
+{ "provider": "custom", "customKey": "atlassian", "company": "Atlassian", "enabled": true }
+
+{ "provider": "custom", "customKey": "uber",
+  "company": "Uber", "enabled": true, "query": { "q": "software engineer", "maxPages": "3" } }
+
+{ "provider": "custom", "customKey": "netflix",
+  "company": "Netflix", "enabled": true, "query": { "q": "engineer", "maxPages": "3" } }
 ```
 
 Google has no public JSON API, so its fetcher parses the server-rendered results
 HTML (no browser). Microsoft uses its `gcsservices.careers.microsoft.com` JSON
-backend. Add more (Amazon, etc.) by writing a fetcher and registering it.
+backend. Amazon uses the `amazon.jobs/search.json` API (descriptions live in the
+search payload, since its job pages are client-rendered). Atlassian returns every
+posting (with descriptions) from one listings endpoint — filtering happens
+downstream, so it takes no `query`. Uber and Netflix use their in-house JSON
+search APIs. Add more by writing a fetcher and registering it.
 
 ## Resume tailoring
 

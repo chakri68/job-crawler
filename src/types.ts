@@ -33,8 +33,18 @@ export type NotifierConfig = {
 
 export type SourceConfig = {
   /** generic ATS provider, or "custom" for a hand-written fetcher */
-  provider: "greenhouse" | "lever" | "ashby" | "custom";
-  /** board slug for ATS providers, e.g. "stripe" */
+  provider:
+    | "greenhouse"
+    | "lever"
+    | "ashby"
+    | "smartrecruiters"
+    | "workday"
+    | "custom";
+  /**
+   * board slug for ATS providers, e.g. "stripe".
+   * For workday this is the tenant, e.g. "nvidia"; pair it with
+   * query.dc (datacenter, e.g. "wd5") and query.site (career site id).
+   */
   board?: string;
   /** display name */
   company: string;

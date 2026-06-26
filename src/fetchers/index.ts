@@ -37,6 +37,10 @@ function stripHtml(html: string | undefined): string {
     .replace(/&amp;/g, "&")
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#0*39;|&#x0*27;|&apos;/gi, "'")
+    .replace(/&#(\d+);/g, (_, d) => String.fromCodePoint(Number(d)))
+    .replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCodePoint(parseInt(h, 16)))
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -163,6 +167,156 @@ function ashby(cfg: SourceConfig): Fetcher {
       const data = (await getJson(listUrl)) as { jobs?: AshbyJob[] };
       const found = data.jobs?.find((j) => j.id === job.jobId);
       return stripHtml(found?.descriptionPlain);
+    },
+  };
+}
+
+// ─── SmartRecruiters ─────────────────────────────────────────────────────────
+// https://api.smartrecruiters.com/v1/companies/{company}/postings
+type SrJob = {
+  id: string;
+  name: string;
+  releasedDate?: string;
+  location?: { fullLocation?: string; city?: string; country?: string };
+};
+type SrListResp = { content?: SrJob[]; totalFound?: number };
+type SrDetail = {
+  jobAd?: {
+    sections?: Record<string, { text?: string }>;
+  };
+};
+
+function srLocation(loc: SrJob["location"]): string {
+  if (!loc) return "";
+  if (loc.fullLocation) return loc.fullLocation;
+  return [loc.city, loc.country].filter(Boolean).join(", ");
+}
+
+function smartrecruiters(cfg: SourceConfig): Fetcher {
+  const board = cfg.board!;
+  const key = `smartrecruiters:${board}`;
+  const api = `https://api.smartrecruiters.com/v1/companies/${board}/postings`;
+  const pageSize = 100;
+  return {
+    key,
+    company: cfg.company,
+    async fetchJobs() {
+      const now = nowIso();
+      const jobs: JobPosting[] = [];
+      for (let offset = 0; ; offset += pageSize) {
+        const url = `${api}?${qs({
+          limit: String(pageSize),
+          offset: String(offset),
+        })}`;
+        const data = (await getJson(url)) as SrListResp;
+        const batch = data.content ?? [];
+        for (const j of batch) {
+          jobs.push({
+            source: key,
+            company: cfg.company,
+            jobId: j.id,
+            title: j.name,
+            location: srLocation(j.location),
+            url: `https://jobs.smartrecruiters.com/${board}/${j.id}`,
+            detectedAt: now,
+            postedAt: j.releasedDate,
+            sourceUrl: api,
+          });
+        }
+        const total = data.totalFound ?? jobs.length;
+        if (batch.length === 0 || jobs.length >= total) break;
+      }
+      return jobs;
+    },
+    async fetchDescription(job) {
+      const data = (await getJson(`${api}/${job.jobId}`)) as SrDetail;
+      const sections = data.jobAd?.sections ?? {};
+      return stripHtml(
+        Object.values(sections)
+          .map((s) => s.text)
+          .filter(Boolean)
+          .join(" "),
+      );
+    },
+  };
+}
+
+// ─── Workday ─────────────────────────────────────────────────────────────────
+// In-house but ubiquitous, so treated as a generic provider. A board is a
+// (tenant, datacenter, site) triple, e.g. nvidia / wd5 / NVIDIAExternalCareerSite:
+//   { provider: "workday", board: "nvidia",
+//     query: { dc: "wd5", site: "NVIDIAExternalCareerSite" } }
+//   list:   POST {host}/wday/cxs/{tenant}/{site}/jobs   (paged JSON)
+//   detail: GET  {host}/wday/cxs/{tenant}/{site}{externalPath}
+type WdJob = {
+  title: string;
+  externalPath: string;
+  locationsText?: string;
+  postedOn?: string;
+  bulletFields?: string[];
+};
+type WdListResp = { total?: number; jobPostings?: WdJob[] };
+type WdDetail = { jobPostingInfo?: { jobDescription?: string } };
+
+function workday(cfg: SourceConfig): Fetcher {
+  const tenant = cfg.board!;
+  const dc = cfg.query?.dc ?? "wd1";
+  const site = cfg.query?.site;
+  if (!site) throw new Error(`workday source "${tenant}" needs query.site`);
+  const key = `workday:${tenant}`;
+  const host = `https://${tenant}.${dc}.myworkdayjobs.com`;
+  const cxs = `${host}/wday/cxs/${tenant}/${site}`;
+  const sitePrefix = `${host}/${site}`;
+  const pageSize = 20;
+  return {
+    key,
+    company: cfg.company,
+    async fetchJobs() {
+      const now = nowIso();
+      const searchText = cfg.query?.q ?? "";
+      const maxPages = Number(cfg.query?.maxPages ?? 5);
+      const jobs: JobPosting[] = [];
+      for (let pg = 0; pg < maxPages; pg++) {
+        const res = await fetch(`${cxs}/jobs`, {
+          method: "POST",
+          headers: {
+            "user-agent": UA,
+            accept: "application/json",
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({
+            limit: pageSize,
+            offset: pg * pageSize,
+            searchText,
+            appliedFacets: {},
+          }),
+        });
+        if (!res.ok) throw new Error(`POST ${cxs}/jobs → ${res.status}`);
+        const data = (await res.json()) as WdListResp;
+        const batch = data.jobPostings ?? [];
+        for (const j of batch) {
+          jobs.push({
+            source: key,
+            company: cfg.company,
+            jobId: j.bulletFields?.[0] ?? j.externalPath,
+            title: j.title,
+            location: j.locationsText ?? "",
+            url: `${sitePrefix}${j.externalPath}`,
+            detectedAt: now,
+            sourceUrl: `${cxs}/jobs`,
+          });
+        }
+        const total = data.total ?? jobs.length;
+        if (batch.length === 0 || jobs.length >= total) break;
+      }
+      return jobs;
+    },
+    async fetchDescription(job) {
+      const externalPath = job.url.startsWith(sitePrefix)
+        ? job.url.slice(sitePrefix.length)
+        : job.url.slice(host.length);
+      const data = (await getJson(`${cxs}${externalPath}`)) as WdDetail;
+      return stripHtml(data.jobPostingInfo?.jobDescription);
     },
   };
 }
@@ -314,14 +468,307 @@ function microsoft(cfg: SourceConfig): Fetcher {
   };
 }
 
+// ─── Amazon ──────────────────────────────────────────────────────────────────
+// Public search JSON behind amazon.jobs. Descriptions ship in the list payload.
+//   list: https://www.amazon.jobs/en/search.json?...
+// Config query params map onto the search, e.g.
+//   "query": { "loc_query": "India", "base_query": "software engineer" }
+const AMZN_SEARCH = "https://www.amazon.jobs/en/search.json";
+const AMZN_BASE = "https://www.amazon.jobs";
+
+type AmznJob = {
+  id_icims: string;
+  title: string;
+  job_path: string;
+  location?: string;
+  normalized_location?: string;
+  posted_date?: string;
+  description?: string;
+  basic_qualifications?: string;
+  preferred_qualifications?: string;
+};
+type AmznResp = { jobs?: AmznJob[]; hits?: number };
+
+function amazon(cfg: SourceConfig): Fetcher {
+  const key = `custom:${cfg.customKey}`;
+  const query = cfg.query ?? { loc_query: "India" };
+  const pageSize = Number(query.result_limit ?? 100);
+  const maxPages = Number(query.maxPages ?? 3);
+
+  // The search list payload is the only reliable source of descriptions —
+  // amazon.jobs job pages are client-rendered, so scraping them yields nothing.
+  // We page through the configured search and yield the raw jobs.
+  async function* search(): AsyncGenerator<AmznJob> {
+    const { result_limit: _rl, maxPages: _mp, ...rest } = query;
+    const base: Record<string, string> = {
+      sort: "recent",
+      result_limit: String(pageSize),
+      ...rest,
+    };
+    for (let pg = 0; pg < maxPages; pg++) {
+      const url = `${AMZN_SEARCH}?${qs({
+        ...base,
+        offset: String(pg * pageSize),
+      })}`;
+      const batch = ((await getJson(url)) as AmznResp).jobs ?? [];
+      for (const j of batch) yield j;
+      if (batch.length < pageSize) break;
+    }
+  }
+
+  return {
+    key,
+    company: cfg.company,
+    async fetchJobs() {
+      const now = nowIso();
+      const jobs: JobPosting[] = [];
+      for await (const j of search()) {
+        jobs.push({
+          source: key,
+          company: cfg.company,
+          jobId: String(j.id_icims),
+          title: j.title,
+          location: j.normalized_location ?? j.location ?? "",
+          url: `${AMZN_BASE}${j.job_path}`,
+          detectedAt: now,
+          postedAt: j.posted_date,
+          sourceUrl: AMZN_SEARCH,
+        });
+      }
+      return jobs;
+    },
+    async fetchDescription(job) {
+      for await (const j of search()) {
+        if (String(j.id_icims) !== job.jobId) continue;
+        return stripHtml(
+          [j.description, j.basic_qualifications, j.preferred_qualifications]
+            .filter(Boolean)
+            .join(" "),
+        );
+      }
+      return "";
+    },
+  };
+}
+
+// ─── Atlassian ───────────────────────────────────────────────────────────────
+// Single public listings endpoint returns every posting with descriptions inline
+// (no detail fetch, no query params — downstream filters do the narrowing).
+//   list: https://www.atlassian.com/endpoint/careers/listings
+const ATLASSIAN_LISTINGS = "https://www.atlassian.com/endpoint/careers/listings";
+
+type AtlassianJob = {
+  id: number;
+  title: string;
+  locations?: string[];
+  category?: string;
+  overview?: string;
+  responsibilities?: string;
+  qualifications?: string;
+  applyUrl?: string;
+  portalJobPost?: { portalUrl?: string; updatedDate?: string };
+};
+
+function atlassian(cfg: SourceConfig): Fetcher {
+  const key = `custom:${cfg.customKey}`;
+  const getListings = async () =>
+    (await getJson(ATLASSIAN_LISTINGS)) as AtlassianJob[];
+  return {
+    key,
+    company: cfg.company,
+    async fetchJobs() {
+      const now = nowIso();
+      return (await getListings()).map((j) => ({
+        source: key,
+        company: cfg.company,
+        jobId: String(j.id),
+        title: j.title,
+        location: (j.locations ?? []).join(" / "),
+        url: j.portalJobPost?.portalUrl ?? j.applyUrl ?? "",
+        detectedAt: now,
+        postedAt: j.portalJobPost?.updatedDate,
+        sourceUrl: ATLASSIAN_LISTINGS,
+      }));
+    },
+    async fetchDescription(job) {
+      const found = (await getListings()).find(
+        (j) => String(j.id) === job.jobId,
+      );
+      return stripHtml(
+        [found?.overview, found?.responsibilities, found?.qualifications]
+          .filter(Boolean)
+          .join(" "),
+      );
+    },
+  };
+}
+
+// ─── Uber ────────────────────────────────────────────────────────────────────
+// In-house JSON search; descriptions ship inline (markdown). Config query, e.g.
+//   "query": { "q": "software engineer", "maxPages": "3" }
+const UBER_SEARCH = "https://www.uber.com/api/loadSearchJobsResults?localeCode=en";
+
+type UberJob = {
+  id: number;
+  title: string;
+  description?: string;
+  location?: { city?: string; region?: string; countryName?: string };
+  updatedDate?: string;
+};
+type UberResp = {
+  data?: { results?: UberJob[]; totalResults?: { low?: number } };
+};
+
+function uberLocation(loc: UberJob["location"]): string {
+  if (!loc) return "";
+  return [loc.city, loc.region, loc.countryName].filter(Boolean).join(", ");
+}
+
+function uber(cfg: SourceConfig): Fetcher {
+  const key = `custom:${cfg.customKey}`;
+  const query = cfg.query ?? {};
+  const pageSize = Number(query.limit ?? 100);
+  const maxPages = Number(query.maxPages ?? 3);
+
+  // Descriptions are inline in the search payload, so re-page the search and
+  // match by id when a description is later requested.
+  async function* search(): AsyncGenerator<UberJob> {
+    for (let page = 0; page < maxPages; page++) {
+      const res = await fetch(UBER_SEARCH, {
+        method: "POST",
+        headers: {
+          "user-agent": UA,
+          accept: "application/json",
+          "content-type": "application/json",
+          "x-csrf-token": "x",
+        },
+        body: JSON.stringify({
+          params: { query: query.q ?? "" },
+          limit: pageSize,
+          page,
+        }),
+      });
+      if (!res.ok) throw new Error(`POST ${UBER_SEARCH} → ${res.status}`);
+      const data = (await res.json()) as UberResp;
+      const batch = data.data?.results ?? [];
+      for (const j of batch) yield j;
+      if (batch.length < pageSize) break;
+    }
+  }
+
+  return {
+    key,
+    company: cfg.company,
+    async fetchJobs() {
+      const now = nowIso();
+      const jobs: JobPosting[] = [];
+      for await (const j of search()) {
+        jobs.push({
+          source: key,
+          company: cfg.company,
+          jobId: String(j.id),
+          title: j.title,
+          location: uberLocation(j.location),
+          url: `https://www.uber.com/careers/list/${j.id}/`,
+          detectedAt: now,
+          postedAt: j.updatedDate,
+          sourceUrl: UBER_SEARCH,
+        });
+      }
+      return jobs;
+    },
+    async fetchDescription(job) {
+      for await (const j of search()) {
+        if (String(j.id) === job.jobId) return stripHtml(j.description);
+      }
+      return "";
+    },
+  };
+}
+
+// ─── Netflix ─────────────────────────────────────────────────────────────────
+// Eightfold-hosted board. The list omits descriptions; the per-job endpoint
+// fills `job_description`. Config query, e.g. "query": { "q": "engineer" }.
+//   list:   https://explore.jobs.netflix.net/api/apply/v2/jobs?domain=netflix.com&start=&num=&query=
+//   detail: https://explore.jobs.netflix.net/api/apply/v2/jobs/{id}?domain=netflix.com
+const NETFLIX_API = "https://explore.jobs.netflix.net/api/apply/v2/jobs";
+const NETFLIX_DOMAIN = "netflix.com";
+
+type NetflixJob = {
+  id: number;
+  name: string;
+  location?: string;
+  locations?: string[];
+  t_update?: number;
+  canonicalPositionUrl?: string;
+  job_description?: string;
+};
+type NetflixResp = { positions?: NetflixJob[]; count?: number };
+
+function netflix(cfg: SourceConfig): Fetcher {
+  const key = `custom:${cfg.customKey}`;
+  const query = cfg.query ?? {};
+  const pageSize = Number(query.num ?? 100);
+  const maxPages = Number(query.maxPages ?? 3);
+  return {
+    key,
+    company: cfg.company,
+    async fetchJobs() {
+      const now = nowIso();
+      const jobs: JobPosting[] = [];
+      for (let pg = 0; pg < maxPages; pg++) {
+        const url = `${NETFLIX_API}?${qs({
+          domain: NETFLIX_DOMAIN,
+          start: String(pg * pageSize),
+          num: String(pageSize),
+          query: query.q ?? "",
+        })}`;
+        const data = (await getJson(url)) as NetflixResp;
+        const batch = data.positions ?? [];
+        for (const j of batch) {
+          jobs.push({
+            source: key,
+            company: cfg.company,
+            jobId: String(j.id),
+            title: j.name,
+            location: j.location ?? (j.locations ?? []).join(" / "),
+            url:
+              j.canonicalPositionUrl ??
+              `https://explore.jobs.netflix.net/careers/job/${j.id}`,
+            detectedAt: now,
+            postedAt: j.t_update
+              ? new Date(j.t_update * 1000).toISOString()
+              : undefined,
+            sourceUrl: NETFLIX_API,
+          });
+        }
+        const total = data.count ?? jobs.length;
+        if (batch.length === 0 || jobs.length >= total) break;
+      }
+      return jobs;
+    },
+    async fetchDescription(job) {
+      const data = (await getJson(
+        `${NETFLIX_API}/${job.jobId}?${qs({ domain: NETFLIX_DOMAIN })}`,
+      )) as NetflixJob & NetflixResp;
+      const desc = data.job_description ?? data.positions?.[0]?.job_description;
+      return stripHtml(desc);
+    },
+  };
+}
+
 /**
- * Registry for hand-written custom fetchers (Google/Microsoft/Amazon in-house
- * sources). Add entries here and reference them via
+ * Registry for hand-written custom fetchers (in-house sources that aren't a
+ * generic ATS). Add entries here and reference them via
  * { provider: "custom", customKey: "..." } in config.
  */
 const CUSTOM: Record<string, (cfg: SourceConfig) => Fetcher> = {
   google,
   microsoft,
+  amazon,
+  atlassian,
+  uber,
+  netflix,
 };
 
 export function buildFetcher(cfg: SourceConfig): Fetcher {
@@ -332,6 +779,10 @@ export function buildFetcher(cfg: SourceConfig): Fetcher {
       return lever(cfg);
     case "ashby":
       return ashby(cfg);
+    case "smartrecruiters":
+      return smartrecruiters(cfg);
+    case "workday":
+      return workday(cfg);
     case "custom": {
       const make = cfg.customKey ? CUSTOM[cfg.customKey] : undefined;
       if (!make) throw new Error(`Unknown custom fetcher: ${cfg.customKey}`);

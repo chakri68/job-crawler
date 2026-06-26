@@ -84,6 +84,60 @@
         "pgSz": "20",
         "maxPages": "3"
       }
+    },
+    {
+      "provider": "smartrecruiters",
+      "board": "Visa",
+      "company": "Visa",
+      "enabled": false
+    },
+    {
+      "provider": "workday",
+      "board": "nvidia",
+      "company": "NVIDIA",
+      "enabled": false,
+      "query": {
+        "dc": "wd5",
+        "site": "NVIDIAExternalCareerSite",
+        "maxPages": "5"
+      }
+    },
+    {
+      "provider": "custom",
+      "customKey": "amazon",
+      "company": "Amazon",
+      "enabled": false,
+      "query": {
+        "loc_query": "India",
+        "base_query": "software engineer",
+        "maxPages": "3"
+      }
+    },
+    {
+      "provider": "custom",
+      "customKey": "atlassian",
+      "company": "Atlassian",
+      "enabled": false
+    },
+    {
+      "provider": "custom",
+      "customKey": "uber",
+      "company": "Uber",
+      "enabled": false,
+      "query": {
+        "q": "software engineer",
+        "maxPages": "3"
+      }
+    },
+    {
+      "provider": "custom",
+      "customKey": "netflix",
+      "company": "Netflix",
+      "enabled": false,
+      "query": {
+        "q": "engineer",
+        "maxPages": "3"
+      }
     }
   ]
 }

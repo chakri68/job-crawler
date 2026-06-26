@@ -87,13 +87,13 @@
       "required": ["provider", "company", "enabled"],
       "properties": {
         "provider": {
-          "description": "Fetcher type. ATS providers (greenhouse/lever/ashby) need a \"board\"; \"custom\" needs a \"customKey\".",
-          "enum": ["greenhouse", "lever", "ashby", "custom"]
+          "description": "Fetcher type. ATS providers (greenhouse/lever/ashby/smartrecruiters) need a \"board\"; \"workday\" uses \"board\" as the tenant plus query.dc/query.site; \"custom\" needs a \"customKey\".",
+          "enum": ["greenhouse", "lever", "ashby", "smartrecruiters", "workday", "custom"]
         },
         "board": {
           "type": "string",
-          "description": "Board slug for ATS providers, e.g. \"stripe\" → boards-api.greenhouse.io/v1/boards/stripe/jobs.",
-          "examples": ["stripe", "databricks", "rippling"]
+          "description": "Board slug for ATS providers, e.g. \"stripe\" → boards-api.greenhouse.io/v1/boards/stripe/jobs. For \"workday\" this is the tenant (e.g. \"salesforce\").",
+          "examples": ["stripe", "databricks", "rippling", "Visa", "salesforce"]
         },
         "company": {
           "type": "string",
@@ -106,16 +106,16 @@
         "customKey": {
           "description": "For provider \"custom\": which built-in custom fetcher to use.",
           "type": "string",
-          "examples": ["google", "microsoft"]
+          "examples": ["google", "microsoft", "amazon", "atlassian", "uber", "netflix"]
         },
         "query": {
           "type": "object",
-          "description": "For provider \"custom\": query params passed to the source. All values are strings.",
+          "description": "Query params passed to the source (provider \"custom\" and \"workday\"). All values are strings.",
           "additionalProperties": { "type": "string" },
           "properties": {
             "q": {
               "type": "string",
-              "description": "Keyword/search term (google + microsoft)."
+              "description": "Keyword/search term (google, microsoft, uber, netflix, workday searchText)."
             },
             "location": {
               "type": "string",
@@ -129,9 +129,25 @@
               "type": "string",
               "description": "Microsoft page size per request (e.g. \"20\")."
             },
+            "loc_query": {
+              "type": "string",
+              "description": "Amazon location filter (e.g. \"India\")."
+            },
+            "base_query": {
+              "type": "string",
+              "description": "Amazon keyword/search term (e.g. \"software engineer\")."
+            },
+            "dc": {
+              "type": "string",
+              "description": "Workday datacenter from the careers host, e.g. \"wd5\" in tenant.wd5.myworkdayjobs.com."
+            },
+            "site": {
+              "type": "string",
+              "description": "Workday career-site id, e.g. \"External_Career_Site\"."
+            },
             "maxPages": {
               "type": "string",
-              "description": "Max pages to page through (google + microsoft). e.g. \"3\"."
+              "description": "Max pages to page through. e.g. \"3\"."
             }
           }
         }
@@ -139,7 +155,11 @@
       "allOf": [
         {
           "if": {
-            "properties": { "provider": { "enum": ["greenhouse", "lever", "ashby"] } }
+            "properties": {
+              "provider": {
+                "enum": ["greenhouse", "lever", "ashby", "smartrecruiters", "workday"]
+              }
+            }
           },
           "then": {
             "required": ["board"],

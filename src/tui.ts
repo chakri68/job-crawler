@@ -92,6 +92,41 @@ function renderSourcesPanel(cfg: Config, states: SourceStateRow[]): string {
   return lines.join("\n");
 }
 
+/** Most recent value across source-state rows (ISO strings sort chronologically). */
+function latest(states: SourceStateRow[], pick: (s: SourceStateRow) => string | null): string | null {
+  const vals = states.map(pick).filter((v): v is string => !!v).sort();
+  return vals.at(-1) ?? null;
+}
+
+/** The "run now?" warning: last-run details so you don't fire a redundant poll. */
+function renderRunPrompt(cfg: Config, states: SourceStateRow[]): string {
+  const enabled = cfg.sources.filter((s) => s.enabled);
+  const byKey = new Map(states.map((s) => [s.source, s]));
+  const failing = enabled.filter((s) => (byKey.get(sourceKey(s))?.fail_streak ?? 0) > 0).length;
+  const lastRun = latest(states, (s) => s.last_run);
+  const lastOk = latest(states, (s) => s.last_ok);
+
+  const lines = ["{bold}Run all enabled sources now?{/}", ""];
+  if (lastRun) {
+    lines.push(`{gray-fg}Last run    {/} {bold}${relTime(lastRun)}{/}  {gray-fg}(${esc(lastRun)}){/}`);
+    lines.push(`{gray-fg}Last success{/} ${lastOk ? relTime(lastOk) : "{red-fg}never{/}"}`);
+  } else {
+    lines.push("{yellow-fg}No previous run recorded yet.{/}");
+  }
+  lines.push(
+    `{gray-fg}Sources     {/} ${enabled.length} enabled` +
+      (failing > 0 ? `   {red-fg}· ${failing} failing{/}` : "   {green-fg}· all ok{/}"),
+  );
+  lines.push("");
+  if (lastRun && Date.now() - new Date(lastRun).getTime() < 15 * 60 * 1000) {
+    lines.push(`{yellow-fg}⚠ Last run was only ${relTime(lastRun)} — running again may be redundant.{/}`);
+  }
+  lines.push("{gray-fg}This fetches every enabled source and may send alerts for new matches.{/}");
+  lines.push("");
+  lines.push("{bold}{green-fg}y{/} run now   {bold}n{/}{gray-fg}/{bold}esc{/}{gray-fg} cancel{/}");
+  return lines.join("\n");
+}
+
 export function runTui(): void {
   const store = new Store();
   const cfg = loadConfig();
@@ -162,8 +197,8 @@ export function runTui(): void {
     tags: true,
     content:
       " {gray-fg}{bold}j/k{/}{gray-fg} move  {bold}enter/o{/}{gray-fg} open  " +
-      "{bold}t{/}{gray-fg} tailor  {bold}d{/}{gray-fg} dismiss  {bold}s{/}{gray-fg} sources  " +
-      "{bold}/{/}{gray-fg} search  {bold}q{/}{gray-fg} quit{/}",
+      "{bold}t{/}{gray-fg} tailor  {bold}d{/}{gray-fg} dismiss  {bold}r{/}{gray-fg} run  " +
+      "{bold}s{/}{gray-fg} sources  {bold}/{/}{gray-fg} search  {bold}q{/}{gray-fg} quit{/}",
   });
 
   const sourcesPanel = blessed.box({
@@ -207,6 +242,21 @@ export function runTui(): void {
     border: "line",
     padding: { left: 2, right: 2, top: 0, bottom: 0 },
     style: { border: { fg: "red" }, label: { fg: "red" } },
+  });
+
+  const runPanel = blessed.box({
+    parent: screen,
+    label: " Run now ",
+    top: "center",
+    left: "center",
+    width: "70%",
+    height: 13,
+    tags: true,
+    hidden: true,
+    keys: true,
+    border: "line",
+    padding: { left: 2, right: 2, top: 0, bottom: 0 },
+    style: { border: { fg: "yellow" }, label: { fg: "yellow" } },
   });
 
   // @types/blessed omits ListElement.selected though it exists at runtime.
@@ -317,6 +367,45 @@ export function runTui(): void {
   confirm.key(["y"], performDismiss);
   confirm.key(["n", "escape"], closeConfirm);
 
+  function showRunPrompt(): void {
+    runPanel.setContent(renderRunPrompt(cfg, states));
+    runPanel.show();
+    runPanel.setFront();
+    runPanel.focus();
+    screen.render();
+  }
+  function closeRunPrompt(): void {
+    runPanel.hide();
+    list.focus();
+    screen.render();
+  }
+  // Hand off to a child `run` (the runner logs to stdout, which would corrupt
+  // the blessed screen in-process), then relaunch the TUI with fresh data.
+  function performRun(): void {
+    runPanel.hide();
+    screen.destroy();
+    console.log("\n  Running job-cron search…\n");
+    const child = spawn(process.execPath, [projectPath("src", "cli.ts"), "run"], {
+      stdio: "inherit",
+    });
+    child.on("exit", () => {
+      process.stdout.write("\n  Run complete. Press Enter to return to the dashboard… ");
+      const stdin = process.stdin;
+      stdin.setRawMode?.(false);
+      stdin.resume();
+      stdin.once("data", () => {
+        stdin.pause();
+        runTui();
+      });
+    });
+    child.on("error", (err) => {
+      console.error(err);
+      process.exit(1);
+    });
+  }
+  runPanel.key(["y"], performRun);
+  runPanel.key(["n", "escape"], closeRunPrompt);
+
   // Keep the detail pane in sync as the cursor moves.
   list.on("keypress", () => process.nextTick(refreshDetail));
   list.on("select", openSelected);
@@ -324,6 +413,7 @@ export function runTui(): void {
   list.key(["o"], openSelected);
   list.key(["t"], tailorSelected);
   list.key(["d"], confirmDismiss);
+  list.key(["r"], showRunPrompt);
 
   list.key(["s"], () => {
     sourcesPanel.show();
