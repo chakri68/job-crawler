@@ -17,13 +17,22 @@ export function matches(job: JobPosting, filters: Filters): boolean {
   const title = job.title;
   const loc = `${job.location} ${job.title}`; // some sources fold location into title
 
-  if (filters.excludeKeywords.length && containsAny(title, filters.excludeKeywords)) {
+  if (
+    filters.excludeKeywords.length &&
+    containsAny(title, filters.excludeKeywords)
+  ) {
     return false;
   }
-  if (filters.includeKeywords.length && !containsAny(title, filters.includeKeywords)) {
+  if (
+    filters.includeKeywords.length &&
+    !containsAny(title, filters.includeKeywords)
+  ) {
     return false;
   }
-  if (filters.locationKeywords.length && !containsAny(loc, filters.locationKeywords)) {
+  if (
+    filters.locationKeywords.length &&
+    !containsAny(loc, filters.locationKeywords)
+  ) {
     return false;
   }
   return true;

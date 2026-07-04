@@ -140,7 +140,12 @@ export async function notify(
       );
       return;
     }
-    await sendTelegram(formatBatchTelegram(company, jobs), webhookUrl, chatId, "HTML");
+    await sendTelegram(
+      formatBatchTelegram(company, jobs),
+      webhookUrl,
+      chatId,
+      "HTML",
+    );
   }
 }
 

@@ -64,7 +64,10 @@ function render(r) {
 
   const ed = r.education ?? {};
   const achievements = (r.achievements ?? [])
-    .map((a) => `<li><strong>${esc(a.title)}</strong> — ${esc(a.description)}</li>`)
+    .map(
+      (a) =>
+        `<li><strong>${esc(a.title)}</strong> — ${esc(a.description)}</li>`,
+    )
     .join("");
 
   return `<!doctype html><html><head><meta charset="utf-8">
@@ -94,7 +97,10 @@ if (!input) {
   process.exit(1);
 }
 const resume = JSON.parse(readFileSync(input, "utf8"));
-const htmlPath = (out ?? input.replace(/\.json$/, "")).replace(/\.pdf$/i, "") + ".html";
+const htmlPath =
+  (out ?? input.replace(/\.json$/, "")).replace(/\.pdf$/i, "") + ".html";
 writeFileSync(htmlPath, render(resume));
 console.log(`[placeholder] rendered HTML resume → ${htmlPath}`);
-console.log(`[placeholder] (real PDF would be written to ${out ?? "<-o path>"})`);
+console.log(
+  `[placeholder] (real PDF would be written to ${out ?? "<-o path>"})`,
+);

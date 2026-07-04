@@ -50,17 +50,25 @@ function cleanTable(head: string[]): InstanceType<typeof Table> {
 
 /** Render the recent-jobs list as an aligned, colorized table. */
 export function renderJobs(rows: JobRow[]): string {
-  if (rows.length === 0) return chalk.dim("No jobs stored yet. Run `job-cron run` first.");
+  if (rows.length === 0)
+    return chalk.dim("No jobs stored yet. Run `job-cron run` first.");
 
   const recentCutoff = Date.now() - 24 * 60 * 60 * 1000;
   const table = cleanTable(["", "Company", "Role", "Location", "Seen"]);
 
   for (const j of rows) {
     const isNew = new Date(j.first_seen).getTime() >= recentCutoff;
-    const dot = isNew ? chalk.green("●") : chalk.dim("·");
+    const marker =
+      j.status === "applied"
+        ? chalk.green("✓")
+        : j.status === "rejected"
+          ? chalk.red("✗")
+          : isNew
+            ? chalk.green("●")
+            : chalk.dim("·");
     const role = `${chalk.white(truncate(j.title, 48))}\n${chalk.dim(j.id)}`;
     table.push([
-      dot,
+      marker,
       chalk.bold(truncate(j.company, 18)),
       role,
       chalk.dim(truncate(j.location || "—", 26)),
@@ -73,7 +81,7 @@ export function renderJobs(rows: JobRow[]): string {
   ).length;
   const footer = chalk.dim(
     `\n${rows.length} job(s) · ${chalk.green(`${newCount} new`)}${chalk.dim(
-      " in last 24h · ● = new · tailor with `job-cron tailor <id>`",
+      " in last 24h · ● new  ✓ applied  ✗ rejected · tailor with `job-cron tailor <id>`",
     )}`,
   );
   return table.toString() + footer;
@@ -83,13 +91,18 @@ export function renderJobs(rows: JobRow[]): string {
 function healthLabel(state: SourceStateRow | undefined): string {
   if (!state || !state.last_run) return chalk.dim("not run yet");
   if (state.fail_streak > 0)
-    return chalk.red(`failing ×${state.fail_streak}`) + chalk.dim(` (last try ${relTime(state.last_run)})`);
+    return (
+      chalk.red(`failing ×${state.fail_streak}`) +
+      chalk.dim(` (last try ${relTime(state.last_run)})`)
+    );
   if (!state.seeded) return chalk.yellow("seeding…");
   return chalk.green("ok") + chalk.dim(` · ${relTime(state.last_ok)}`);
 }
 
 function sourceKey(s: Config["sources"][number]): string {
-  return s.provider === "custom" ? `custom:${s.customKey}` : `${s.provider}:${s.board}`;
+  return s.provider === "custom"
+    ? `custom:${s.customKey}`
+    : `${s.provider}:${s.board}`;
 }
 
 /** Render configured sources joined with their stored health. */
@@ -122,7 +135,9 @@ export function renderStatus(
     const st = byKey.get(sourceKey(s));
     return st && st.last_ok && st.fail_streak === 0;
   }).length;
-  const failing = enabled.filter((s) => (byKey.get(sourceKey(s))?.fail_streak ?? 0) > 0).length;
+  const failing = enabled.filter(
+    (s) => (byKey.get(sourceKey(s))?.fail_streak ?? 0) > 0,
+  ).length;
 
   const stat = (label: string, value: string) =>
     `${chalk.bold(value)} ${chalk.dim(label)}`;
@@ -141,7 +156,9 @@ export function renderStatus(
       [
         stat("sources", `${enabled.length}/${cfg.sources.length}`),
         stat("healthy", chalk.green(String(okCount))),
-        failing > 0 ? stat("failing", chalk.red(String(failing))) : stat("failing", "0"),
+        failing > 0
+          ? stat("failing", chalk.red(String(failing)))
+          : stat("failing", "0"),
       ].join(chalk.dim("   ·   ")),
     line,
   ].join("\n");

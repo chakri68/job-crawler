@@ -2,7 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 import { mkdirSync } from "node:fs";
 import { projectPath } from "./config.ts";
 import { jobKey, nowIso } from "./util.ts";
-import type { JobPosting, JobRow, SourceStateRow } from "./types.ts";
+import type { JobPosting, JobRow, JobStatus, SourceStateRow } from "./types.ts";
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS jobs (
@@ -17,7 +17,8 @@ CREATE TABLE IF NOT EXISTS jobs (
   last_seen   TEXT NOT NULL,
   notified    INTEGER NOT NULL DEFAULT 0,
   looked_at   INTEGER NOT NULL DEFAULT 0,
-  dismissed   INTEGER NOT NULL DEFAULT 0
+  dismissed   INTEGER NOT NULL DEFAULT 0,
+  status      TEXT NOT NULL DEFAULT 'new'
 );
 CREATE TABLE IF NOT EXISTS source_state (
   source      TEXT PRIMARY KEY,
@@ -40,12 +41,23 @@ export class Store {
 
   /** Add columns introduced after a DB was first created. */
   private migrate(): void {
-    const cols = this.db.prepare("PRAGMA table_info(jobs)").all() as { name: string }[];
+    const cols = this.db.prepare("PRAGMA table_info(jobs)").all() as {
+      name: string;
+    }[];
     if (!cols.some((c) => c.name === "looked_at")) {
-      this.db.exec("ALTER TABLE jobs ADD COLUMN looked_at INTEGER NOT NULL DEFAULT 0");
+      this.db.exec(
+        "ALTER TABLE jobs ADD COLUMN looked_at INTEGER NOT NULL DEFAULT 0",
+      );
     }
     if (!cols.some((c) => c.name === "dismissed")) {
-      this.db.exec("ALTER TABLE jobs ADD COLUMN dismissed INTEGER NOT NULL DEFAULT 0");
+      this.db.exec(
+        "ALTER TABLE jobs ADD COLUMN dismissed INTEGER NOT NULL DEFAULT 0",
+      );
+    }
+    if (!cols.some((c) => c.name === "status")) {
+      this.db.exec(
+        "ALTER TABLE jobs ADD COLUMN status TEXT NOT NULL DEFAULT 'new'",
+      );
     }
   }
 
@@ -66,7 +78,10 @@ export class Store {
   }
 
   /** Split jobs into already-seen vs new; record all of them either way. */
-  partitionUnseen(jobs: JobPosting[]): { fresh: JobPosting[]; seen: JobPosting[] } {
+  partitionUnseen(jobs: JobPosting[]): {
+    fresh: JobPosting[];
+    seen: JobPosting[];
+  } {
     const fresh: JobPosting[] = [];
     const seen: JobPosting[] = [];
     const now = nowIso();
@@ -109,15 +124,23 @@ export class Store {
     this.db.prepare("UPDATE jobs SET looked_at = 1 WHERE id = ?").run(id);
   }
 
+  /** Move a job through your pipeline (new → applied/rejected). */
+  setStatus(id: string, status: JobStatus): boolean {
+    const res = this.db
+      .prepare("UPDATE jobs SET status = ? WHERE id = ?")
+      .run(status, id);
+    return Number(res.changes) > 0;
+  }
+
   /**
-   * Jobs eligible for purge: not looked at, and not seen in any poll since
-   * `cutoffIso` (i.e. they've dropped off the career page, so deleting them
-   * won't cause a re-alert). Oldest first.
+   * Jobs eligible for purge: untouched (not looked at, still "new") and not seen
+   * in any poll since `cutoffIso` (i.e. they've dropped off the career page, so
+   * deleting them won't cause a re-alert). Oldest first.
    */
   listPurgeable(cutoffIso: string): JobRow[] {
     return this.db
       .prepare(
-        "SELECT * FROM jobs WHERE looked_at = 0 AND last_seen < ? ORDER BY last_seen ASC",
+        "SELECT * FROM jobs WHERE looked_at = 0 AND status = 'new' AND last_seen < ? ORDER BY last_seen ASC",
       )
       .all(cutoffIso) as JobRow[];
   }
@@ -125,7 +148,9 @@ export class Store {
   /** Delete purgeable jobs (see listPurgeable); returns how many were removed. */
   purgeJobs(cutoffIso: string): number {
     const res = this.db
-      .prepare("DELETE FROM jobs WHERE looked_at = 0 AND last_seen < ?")
+      .prepare(
+        "DELETE FROM jobs WHERE looked_at = 0 AND status = 'new' AND last_seen < ?",
+      )
       .run(cutoffIso);
     return Number(res.changes);
   }
@@ -136,7 +161,9 @@ export class Store {
    * a row was updated.
    */
   dismissJob(id: string): boolean {
-    const res = this.db.prepare("UPDATE jobs SET dismissed = 1 WHERE id = ?").run(id);
+    const res = this.db
+      .prepare("UPDATE jobs SET dismissed = 1 WHERE id = ?")
+      .run(id);
     return Number(res.changes) > 0;
   }
 
@@ -167,8 +194,7 @@ export class Store {
 
   getJob(id: string): JobRow | undefined {
     return this.db.prepare("SELECT * FROM jobs WHERE id = ?").get(id) as
-      | JobRow
-      | undefined;
+      JobRow | undefined;
   }
 
   /** Find a job by id, or by exact apply URL as a fallback. */
@@ -176,14 +202,15 @@ export class Store {
     return (
       this.getJob(idOrUrl) ??
       (this.db.prepare("SELECT * FROM jobs WHERE url = ?").get(idOrUrl) as
-        | JobRow
-        | undefined)
+        JobRow | undefined)
     );
   }
 
   listJobs(limit = 50): JobRow[] {
     return this.db
-      .prepare("SELECT * FROM jobs WHERE dismissed = 0 ORDER BY first_seen DESC LIMIT ?")
+      .prepare(
+        "SELECT * FROM jobs WHERE dismissed = 0 ORDER BY first_seen DESC LIMIT ?",
+      )
       .all(limit) as JobRow[];
   }
 
@@ -200,10 +227,14 @@ export class Store {
       .prepare("SELECT COUNT(*) c FROM jobs WHERE dismissed = 0")
       .get() as { c: number };
     const notified = this.db
-      .prepare("SELECT COUNT(*) c FROM jobs WHERE notified = 1 AND dismissed = 0")
+      .prepare(
+        "SELECT COUNT(*) c FROM jobs WHERE notified = 1 AND dismissed = 0",
+      )
       .get() as { c: number };
     const recent = this.db
-      .prepare("SELECT COUNT(*) c FROM jobs WHERE first_seen >= ? AND dismissed = 0")
+      .prepare(
+        "SELECT COUNT(*) c FROM jobs WHERE first_seen >= ? AND dismissed = 0",
+      )
       .get(sinceIso) as { c: number };
     return { total: total.c, notified: notified.c, recent: recent.c };
   }

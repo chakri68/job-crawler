@@ -34,12 +34,7 @@ export type NotifierConfig = {
 export type SourceConfig = {
   /** generic ATS provider, or "custom" for a hand-written fetcher */
   provider:
-    | "greenhouse"
-    | "lever"
-    | "ashby"
-    | "smartrecruiters"
-    | "workday"
-    | "custom";
+    "greenhouse" | "lever" | "ashby" | "smartrecruiters" | "workday" | "custom";
   /**
    * board slug for ATS providers, e.g. "stripe".
    * For workday this is the tenant, e.g. "nvidia"; pair it with
@@ -51,8 +46,13 @@ export type SourceConfig = {
   enabled: boolean;
   /** for provider:"custom", the key into the custom fetcher registry */
   customKey?: string;
-  /** for provider:"custom", query params passed to the source API/page */
-  query?: Record<string, string>;
+  /**
+   * Query params passed to the source API/page (provider:"custom" and
+   * "workday"). Either a single search, or an array of searches whose results
+   * are merged and de-duplicated by job id — e.g. several `q` terms or
+   * locations polled from the same board in one run.
+   */
+  query?: Record<string, string> | Record<string, string>[];
 };
 
 export type Config = {
@@ -72,6 +72,9 @@ export type SourceStateRow = {
   fail_streak: number;
 };
 
+/** Where a job sits in your pipeline. "new" is the untouched default. */
+export type JobStatus = "new" | "applied" | "rejected";
+
 /** A stored job row (snake_case mirrors the SQLite schema). */
 export type JobRow = {
   id: string;
@@ -86,4 +89,5 @@ export type JobRow = {
   notified: number;
   looked_at: number;
   dismissed: number;
+  status: JobStatus;
 };

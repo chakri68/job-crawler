@@ -40,14 +40,18 @@ export async function runOnce(): Promise<void> {
         totalNew += fresh.length;
         log.info(`${fetcher.key}: ${fresh.length} new — alerted.`);
       } else {
-        log.info(`${fetcher.key}: ${jobs.length} jobs, ${matched.length} match, 0 new.`);
+        log.info(
+          `${fetcher.key}: ${jobs.length} jobs, ${matched.length} match, 0 new.`,
+        );
       }
       store.recordOk(fetcher.key);
     } catch (err) {
       failures++;
       const streak = store.recordFail(fetcher.key);
       const e = err as Error & { cause?: { code?: string } };
-      const detail = e.cause?.code ? `${e.message} (${e.cause.code})` : e.message;
+      const detail = e.cause?.code
+        ? `${e.message} (${e.cause.code})`
+        : e.message;
       log.error(`${fetcher.key}: fetch failed (streak ${streak}): ${detail}`);
       if (streak >= config.failStreakAlert) {
         await notifyText(

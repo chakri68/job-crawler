@@ -3,12 +3,19 @@ import { spawn } from "node:child_process";
 import { Store } from "./store.ts";
 import { loadConfig, projectPath } from "./config.ts";
 import { relTime } from "./ui.ts";
-import type { Config, JobRow, SourceStateRow } from "./types.ts";
+import type { Config, JobRow, JobStatus, SourceStateRow } from "./types.ts";
 
 const esc = (s: string): string => blessed.escape(String(s ?? ""));
 
+/** Strip ANSI escape sequences and carriage returns from piped child output. */
+// eslint-disable-next-line no-control-regex
+const stripAnsi = (s: string): string =>
+  s.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "").replace(/\r/g, "");
+
 function sourceKey(s: Config["sources"][number]): string {
-  return s.provider === "custom" ? `custom:${s.customKey}` : `${s.provider}:${s.board}`;
+  return s.provider === "custom"
+    ? `custom:${s.customKey}`
+    : `${s.provider}:${s.board}`;
 }
 
 /** Platform "open this URL in the default browser" command. */
@@ -18,15 +25,31 @@ function openCmd(): string {
   return "xdg-open";
 }
 
-function jobLabel(j: JobRow, width: number): string {
+/** Status ordering for cycling and the labels/colors used everywhere. */
+const STATUS_FILTERS = ["all", "new", "applied", "rejected"] as const;
+type StatusFilter = (typeof STATUS_FILTERS)[number];
+
+/** One-char marker for the job list: status wins over the "new in 24h" dot. */
+function statusMarker(j: JobRow): string {
+  if (j.status === "applied") return "{green-fg}✓{/}";
+  if (j.status === "rejected") return "{red-fg}✗{/}";
   const cutoff = Date.now() - 24 * 60 * 60 * 1000;
-  const isNew = new Date(j.first_seen).getTime() >= cutoff;
-  const dot = isNew ? "{green-fg}●{/}" : " ";
+  return new Date(j.first_seen).getTime() >= cutoff ? "{green-fg}●{/}" : " ";
+}
+
+/** Colored status badge for the detail pane. */
+function statusBadge(status: JobStatus): string {
+  if (status === "applied") return "{green-fg}applied{/}";
+  if (status === "rejected") return "{red-fg}rejected{/}";
+  return "{gray-fg}new{/}";
+}
+
+function jobLabel(j: JobRow, width: number): string {
   const company = esc(j.company);
   const budget = Math.max(10, width - company.length - 8);
   let title = esc(j.title);
   if (title.length > budget) title = title.slice(0, budget - 1) + "…";
-  return `${dot} {bold}${company}{/} {gray-fg}—{/} ${title}`;
+  return `${statusMarker(j)} {bold}${company}{/} {gray-fg}—{/} ${title}`;
 }
 
 function renderDetail(j: JobRow | undefined): string {
@@ -35,6 +58,7 @@ function renderDetail(j: JobRow | undefined): string {
     `{bold}{cyan-fg}${esc(j.title)}{/}`,
     `{bold}${esc(j.company)}{/}   {gray-fg}${esc(j.location || "—")}{/}`,
     "",
+    `{gray-fg}Status {/}  ${statusBadge(j.status)}`,
     `{gray-fg}Source {/}  ${esc(j.source)}`,
     `{gray-fg}Seen   {/}  ${relTime(j.first_seen)}  {gray-fg}(${esc(j.first_seen)}){/}`,
     `{gray-fg}Posted {/}  ${j.posted_at ? esc(j.posted_at) : "—"}`,
@@ -46,6 +70,42 @@ function renderDetail(j: JobRow | undefined): string {
   ].join("\n");
 }
 
+type TailorState = "running" | "done" | "error";
+
+/** The tailor modal body: streamed logs, then a status/hint footer. */
+function renderTailorPanel(
+  job: JobRow | undefined,
+  state: TailorState,
+  logText: string,
+  pdfPath: string | null,
+): string {
+  const head = job
+    ? `{bold}{cyan-fg}${esc(job.company)}{/} {gray-fg}—{/} ${esc(job.title)}`
+    : "";
+  // Log lines are escaped so ANSI-free child output can't break blessed tags.
+  const body = logText.trim()
+    ? stripAnsi(logText).trimEnd().split("\n").map(esc).join("\n")
+    : "{gray-fg}starting…{/}";
+  const lines = [head, "", body, ""];
+  if (state === "running") {
+    lines.push("{yellow-fg}⟳ Tailoring… please wait.{/}");
+  } else if (state === "done") {
+    lines.push("{green-fg}✓ Resume generated.{/}");
+    if (pdfPath) lines.push(`{gray-fg}PDF{/}  {underline}${esc(pdfPath)}{/}`);
+    lines.push("");
+    lines.push(
+      "{bold}{green-fg}enter{/}{gray-fg} open job link   {bold}esc{/}{gray-fg} close{/}",
+    );
+  } else {
+    lines.push("{red-fg}✗ Tailoring failed — see the log above.{/}");
+    lines.push("");
+    lines.push(
+      "{bold}enter{/}{gray-fg} open job link   {bold}esc{/}{gray-fg} close{/}",
+    );
+  }
+  return lines.join("\n");
+}
+
 function renderHeader(
   cfg: Config,
   states: SourceStateRow[],
@@ -53,17 +113,26 @@ function renderHeader(
   shown: number,
 ): string {
   const cutoff = Date.now() - 24 * 60 * 60 * 1000;
-  const newCount = jobs.filter((j) => new Date(j.first_seen).getTime() >= cutoff).length;
+  const newCount = jobs.filter(
+    (j) => new Date(j.first_seen).getTime() >= cutoff,
+  ).length;
+  const applied = jobs.filter((j) => j.status === "applied").length;
+  const rejected = jobs.filter((j) => j.status === "rejected").length;
   const enabled = cfg.sources.filter((s) => s.enabled);
   const byKey = new Map(states.map((s) => [s.source, s]));
-  const failing = enabled.filter((s) => (byKey.get(sourceKey(s))?.fail_streak ?? 0) > 0).length;
+  const failing = enabled.filter(
+    (s) => (byKey.get(sourceKey(s))?.fail_streak ?? 0) > 0,
+  ).length;
   const ok = enabled.length - failing;
 
-  const filtered = shown !== jobs.length ? ` {gray-fg}(showing ${shown}){/}` : "";
+  const filtered =
+    shown !== jobs.length ? ` {gray-fg}(showing ${shown}){/}` : "";
   return (
     ` {bold}{cyan-fg}job-cron{/}   ` +
     `{bold}${jobs.length}{/} {gray-fg}jobs{/}${filtered}   ` +
     `{green-fg}${newCount}{/} {gray-fg}new (24h){/}   ` +
+    `{green-fg}${applied}{/} {gray-fg}applied{/}   ` +
+    `{red-fg}${rejected}{/} {gray-fg}rejected{/}   ` +
     `{gray-fg}sources{/} {bold}${enabled.length}/${cfg.sources.length}{/}   ` +
     `{green-fg}${ok} ok{/}` +
     (failing > 0 ? `   {red-fg}${failing} failing{/}` : "")
@@ -93,8 +162,14 @@ function renderSourcesPanel(cfg: Config, states: SourceStateRow[]): string {
 }
 
 /** Most recent value across source-state rows (ISO strings sort chronologically). */
-function latest(states: SourceStateRow[], pick: (s: SourceStateRow) => string | null): string | null {
-  const vals = states.map(pick).filter((v): v is string => !!v).sort();
+function latest(
+  states: SourceStateRow[],
+  pick: (s: SourceStateRow) => string | null,
+): string | null {
+  const vals = states
+    .map(pick)
+    .filter((v): v is string => !!v)
+    .sort();
   return vals.at(-1) ?? null;
 }
 
@@ -102,28 +177,42 @@ function latest(states: SourceStateRow[], pick: (s: SourceStateRow) => string | 
 function renderRunPrompt(cfg: Config, states: SourceStateRow[]): string {
   const enabled = cfg.sources.filter((s) => s.enabled);
   const byKey = new Map(states.map((s) => [s.source, s]));
-  const failing = enabled.filter((s) => (byKey.get(sourceKey(s))?.fail_streak ?? 0) > 0).length;
+  const failing = enabled.filter(
+    (s) => (byKey.get(sourceKey(s))?.fail_streak ?? 0) > 0,
+  ).length;
   const lastRun = latest(states, (s) => s.last_run);
   const lastOk = latest(states, (s) => s.last_ok);
 
   const lines = ["{bold}Run all enabled sources now?{/}", ""];
   if (lastRun) {
-    lines.push(`{gray-fg}Last run    {/} {bold}${relTime(lastRun)}{/}  {gray-fg}(${esc(lastRun)}){/}`);
-    lines.push(`{gray-fg}Last success{/} ${lastOk ? relTime(lastOk) : "{red-fg}never{/}"}`);
+    lines.push(
+      `{gray-fg}Last run    {/} {bold}${relTime(lastRun)}{/}  {gray-fg}(${esc(lastRun)}){/}`,
+    );
+    lines.push(
+      `{gray-fg}Last success{/} ${lastOk ? relTime(lastOk) : "{red-fg}never{/}"}`,
+    );
   } else {
     lines.push("{yellow-fg}No previous run recorded yet.{/}");
   }
   lines.push(
     `{gray-fg}Sources     {/} ${enabled.length} enabled` +
-      (failing > 0 ? `   {red-fg}· ${failing} failing{/}` : "   {green-fg}· all ok{/}"),
+      (failing > 0
+        ? `   {red-fg}· ${failing} failing{/}`
+        : "   {green-fg}· all ok{/}"),
   );
   lines.push("");
   if (lastRun && Date.now() - new Date(lastRun).getTime() < 15 * 60 * 1000) {
-    lines.push(`{yellow-fg}⚠ Last run was only ${relTime(lastRun)} — running again may be redundant.{/}`);
+    lines.push(
+      `{yellow-fg}⚠ Last run was only ${relTime(lastRun)} — running again may be redundant.{/}`,
+    );
   }
-  lines.push("{gray-fg}This fetches every enabled source and may send alerts for new matches.{/}");
+  lines.push(
+    "{gray-fg}This fetches every enabled source and may send alerts for new matches.{/}",
+  );
   lines.push("");
-  lines.push("{bold}{green-fg}y{/} run now   {bold}n{/}{gray-fg}/{bold}esc{/}{gray-fg} cancel{/}");
+  lines.push(
+    "{bold}{green-fg}y{/} run now   {bold}n{/}{gray-fg}/{bold}esc{/}{gray-fg} cancel{/}",
+  );
   return lines.join("\n");
 }
 
@@ -197,7 +286,8 @@ export function runTui(): void {
     tags: true,
     content:
       " {gray-fg}{bold}j/k{/}{gray-fg} move  {bold}enter/o{/}{gray-fg} open  " +
-      "{bold}t{/}{gray-fg} tailor  {bold}d{/}{gray-fg} dismiss  {bold}r{/}{gray-fg} run  " +
+      "{bold}t{/}{gray-fg} tailor  {bold}a{/}{gray-fg} applied  {bold}x{/}{gray-fg} rejected  " +
+      "{bold}f/tab{/}{gray-fg} filter  {bold}d{/}{gray-fg} dismiss  {bold}r{/}{gray-fg} run  " +
       "{bold}s{/}{gray-fg} sources  {bold}/{/}{gray-fg} search  {bold}q{/}{gray-fg} quit{/}",
   });
 
@@ -259,6 +349,26 @@ export function runTui(): void {
     style: { border: { fg: "yellow" }, label: { fg: "yellow" } },
   });
 
+  const tailorPanel = blessed.box({
+    parent: screen,
+    label: " Tailor ",
+    top: "center",
+    left: "center",
+    width: "80%",
+    height: "75%",
+    tags: true,
+    hidden: true,
+    scrollable: true,
+    alwaysScroll: true,
+    keys: true,
+    vi: true,
+    mouse: true,
+    border: "line",
+    scrollbar: { ch: " ", style: { bg: "cyan" } } as never,
+    padding: { left: 1, right: 1, top: 0, bottom: 0 },
+    style: { border: { fg: "cyan" }, label: { fg: "cyan" } },
+  });
+
   // @types/blessed omits ListElement.selected though it exists at runtime.
   const selectedIndex = (): number =>
     (list as unknown as { selected: number }).selected ?? 0;
@@ -268,7 +378,9 @@ export function runTui(): void {
   function setItems(): void {
     const w = listWidth();
     list.setItems(
-      jobs.length ? jobs.map((j) => jobLabel(j, w)) : ["{gray-fg}No jobs match.{/}"],
+      jobs.length
+        ? jobs.map((j) => jobLabel(j, w))
+        : ["{gray-fg}No jobs match.{/}"],
     );
   }
 
@@ -278,45 +390,141 @@ export function runTui(): void {
     screen.render();
   }
 
-  function applyFilter(q: string): void {
-    const needle = q.trim().toLowerCase();
-    jobs = needle
-      ? allJobs.filter(
-          (j) =>
-            j.company.toLowerCase().includes(needle) ||
-            j.title.toLowerCase().includes(needle) ||
-            j.location.toLowerCase().includes(needle),
-        )
-      : allJobs;
+  let statusFilter: StatusFilter = "all";
+  let searchNeedle = "";
+
+  function updateListLabel(): void {
+    const parts: string[] = statusFilter === "all" ? [] : [statusFilter];
+    if (searchNeedle) parts.push(`/${searchNeedle}`);
+    list.setLabel(parts.length ? ` Jobs · ${parts.join(" · ")} ` : " Jobs ");
+  }
+
+  /** Rebuild the visible list from status + search filters, keeping the cursor
+   *  on `preserveId` when it's still visible. */
+  function recompute(preserveId?: string): void {
+    jobs = allJobs.filter((j) => {
+      if (statusFilter !== "all" && j.status !== statusFilter) return false;
+      if (searchNeedle) {
+        return (
+          j.company.toLowerCase().includes(searchNeedle) ||
+          j.title.toLowerCase().includes(searchNeedle) ||
+          j.location.toLowerCase().includes(searchNeedle)
+        );
+      }
+      return true;
+    });
     setItems();
-    list.select(0);
+    const idx = preserveId ? jobs.findIndex((j) => j.id === preserveId) : -1;
+    list.select(idx === -1 ? 0 : idx);
+    updateListLabel();
     refreshDetail();
+  }
+
+  function cycleFilter(dir: 1 | -1): void {
+    const i = STATUS_FILTERS.indexOf(statusFilter);
+    statusFilter =
+      STATUS_FILTERS[
+        (i + dir + STATUS_FILTERS.length) % STATUS_FILTERS.length
+      ]!;
+    recompute();
+  }
+
+  /** Toggle a job's status (pressing the same status again clears it to "new"). */
+  function markStatus(status: JobStatus): void {
+    const j = jobs[selectedIndex()];
+    if (!j) return;
+    const next: JobStatus = j.status === status ? "new" : status;
+    const store2 = new Store();
+    store2.setStatus(j.id, next);
+    store2.close();
+    const apply = (arr: JobRow[]): void => {
+      const row = arr.find((x) => x.id === j.id);
+      if (row) row.status = next;
+    };
+    apply(allJobs);
+    if (jobs !== allJobs) apply(jobs);
+    recompute(j.id);
+  }
+
+  function openJob(j: JobRow): void {
+    const child = spawn(openCmd(), [j.url], {
+      stdio: "ignore",
+      detached: true,
+    });
+    child.on("error", () => {});
+    child.unref();
   }
 
   function openSelected(): void {
     const j = jobs[selectedIndex()];
-    if (!j) return;
-    const child = spawn(openCmd(), [j.url], { stdio: "ignore", detached: true });
-    child.on("error", () => {});
-    child.unref();
+    if (j) openJob(j);
+  }
+
+  // Tailor modal state. The child `tailor` streams into `tailorPanel`; the modal
+  // stays open (and can't be dismissed) until the child exits.
+  let tailorJob: JobRow | undefined;
+  let tailorState: TailorState = "running";
+  let tailorLog = "";
+  let tailorPdf: string | null = null;
+
+  function paintTailor(): void {
+    tailorPanel.setContent(
+      renderTailorPanel(tailorJob, tailorState, tailorLog, tailorPdf),
+    );
+    tailorPanel.setScrollPerc(100);
+    screen.render();
   }
 
   function tailorSelected(): void {
     const j = jobs[selectedIndex()];
     if (!j) return;
-    screen.destroy();
-    console.log(`\nTailoring resume for: ${j.company} — ${j.title}\n`);
+    tailorJob = j;
+    tailorState = "running";
+    tailorLog = "";
+    tailorPdf = null;
+    tailorPanel.show();
+    tailorPanel.setFront();
+    tailorPanel.focus();
+    paintTailor();
+
     const child = spawn(
       process.execPath,
       [projectPath("src", "cli.ts"), "tailor", j.id],
-      { stdio: "inherit" },
+      { stdio: ["ignore", "pipe", "pipe"] },
     );
-    child.on("exit", (code) => process.exit(code ?? 0));
+    const onData = (d: Buffer): void => {
+      tailorLog += d.toString();
+      // The tailor logs `Done → <path>.pdf` on success — grab the PDF path.
+      const m = tailorLog.match(/Done → (.+\.pdf)/);
+      if (m) tailorPdf = m[1]!.trim();
+      paintTailor();
+    };
+    child.stdout?.on("data", onData);
+    child.stderr?.on("data", onData);
     child.on("error", (err) => {
-      console.error(err);
-      process.exit(1);
+      tailorLog += `\n${err.message}\n`;
+      tailorState = "error";
+      paintTailor();
+    });
+    child.on("exit", (code) => {
+      tailorState = code === 0 ? "done" : "error";
+      paintTailor();
     });
   }
+
+  function closeTailor(): void {
+    if (tailorState === "running") return; // busy — can't dismiss yet
+    tailorPanel.hide();
+    list.focus();
+    screen.render();
+  }
+
+  tailorPanel.key(["escape"], closeTailor);
+  tailorPanel.key(["enter"], () => {
+    if (tailorState === "running") return;
+    if (tailorJob) openJob(tailorJob);
+    closeTailor();
+  });
 
   function confirmDismiss(): void {
     const j = jobs[selectedIndex()];
@@ -385,11 +593,17 @@ export function runTui(): void {
     runPanel.hide();
     screen.destroy();
     console.log("\n  Running job-cron search…\n");
-    const child = spawn(process.execPath, [projectPath("src", "cli.ts"), "run"], {
-      stdio: "inherit",
-    });
+    const child = spawn(
+      process.execPath,
+      [projectPath("src", "cli.ts"), "run"],
+      {
+        stdio: "inherit",
+      },
+    );
     child.on("exit", () => {
-      process.stdout.write("\n  Run complete. Press Enter to return to the dashboard… ");
+      process.stdout.write(
+        "\n  Run complete. Press Enter to return to the dashboard… ",
+      );
       const stdin = process.stdin;
       stdin.setRawMode?.(false);
       stdin.resume();
@@ -412,6 +626,10 @@ export function runTui(): void {
 
   list.key(["o"], openSelected);
   list.key(["t"], tailorSelected);
+  list.key(["a"], () => markStatus("applied"));
+  list.key(["x"], () => markStatus("rejected"));
+  list.key(["f", "tab"], () => cycleFilter(1));
+  list.key(["S-tab"], () => cycleFilter(-1));
   list.key(["d"], confirmDismiss);
   list.key(["r"], showRunPrompt);
 
@@ -444,7 +662,8 @@ export function runTui(): void {
     screen.render();
   };
   search.on("submit", () => {
-    applyFilter(search.getValue());
+    searchNeedle = search.getValue().trim().toLowerCase();
+    recompute();
     endSearch();
   });
   search.on("cancel", endSearch);

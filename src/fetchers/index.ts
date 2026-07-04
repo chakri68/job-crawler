@@ -29,6 +29,21 @@ function qs(params: Record<string, string>): string {
   return new URLSearchParams(params).toString();
 }
 
+/**
+ * Normalize a source's `query` into a list of query objects. A source may set
+ * `query` to a single object (one search) or an array of objects (several
+ * searches whose results are merged). Falls back to `fallback` when `query` is
+ * absent or an empty array.
+ */
+function queriesOf(
+  cfg: SourceConfig,
+  fallback: Record<string, string> = {},
+): Record<string, string>[] {
+  const q = cfg.query;
+  if (Array.isArray(q)) return q.length ? q : [fallback];
+  return [q ?? fallback];
+}
+
 function stripHtml(html: string | undefined): string {
   if (!html) return "";
   return html
@@ -40,7 +55,9 @@ function stripHtml(html: string | undefined): string {
     .replace(/&quot;/g, '"')
     .replace(/&#0*39;|&#x0*27;|&apos;/gi, "'")
     .replace(/&#(\d+);/g, (_, d) => String.fromCodePoint(Number(d)))
-    .replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCodePoint(parseInt(h, 16)))
+    .replace(/&#x([0-9a-f]+);/gi, (_, h) =>
+      String.fromCodePoint(parseInt(h, 16)),
+    )
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -260,8 +277,12 @@ type WdDetail = { jobPostingInfo?: { jobDescription?: string } };
 
 function workday(cfg: SourceConfig): Fetcher {
   const tenant = cfg.board!;
-  const dc = cfg.query?.dc ?? "wd1";
-  const site = cfg.query?.site;
+  const queries = queriesOf(cfg);
+  // dc/site are structural (they define the endpoint), so they come from the
+  // first query that carries them; only searchText/maxPages vary per query.
+  const structural = queries.find((q) => q.site) ?? queries[0]!;
+  const dc = structural.dc ?? "wd1";
+  const site = structural.site;
   if (!site) throw new Error(`workday source "${tenant}" needs query.site`);
   const key = `workday:${tenant}`;
   const host = `https://${tenant}.${dc}.myworkdayjobs.com`;
@@ -273,43 +294,49 @@ function workday(cfg: SourceConfig): Fetcher {
     company: cfg.company,
     async fetchJobs() {
       const now = nowIso();
-      const searchText = cfg.query?.q ?? "";
-      const maxPages = Number(cfg.query?.maxPages ?? 5);
-      const jobs: JobPosting[] = [];
-      for (let pg = 0; pg < maxPages; pg++) {
-        const res = await fetch(`${cxs}/jobs`, {
-          method: "POST",
-          headers: {
-            "user-agent": UA,
-            accept: "application/json",
-            "content-type": "application/json",
-          },
-          body: JSON.stringify({
-            limit: pageSize,
-            offset: pg * pageSize,
-            searchText,
-            appliedFacets: {},
-          }),
-        });
-        if (!res.ok) throw new Error(`POST ${cxs}/jobs → ${res.status}`);
-        const data = (await res.json()) as WdListResp;
-        const batch = data.jobPostings ?? [];
-        for (const j of batch) {
-          jobs.push({
-            source: key,
-            company: cfg.company,
-            jobId: j.bulletFields?.[0] ?? j.externalPath,
-            title: j.title,
-            location: j.locationsText ?? "",
-            url: `${sitePrefix}${j.externalPath}`,
-            detectedAt: now,
-            sourceUrl: `${cxs}/jobs`,
+      const byId = new Map<string, JobPosting>();
+      for (const query of queries) {
+        const searchText = query.q ?? "";
+        const maxPages = Number(query.maxPages ?? 5);
+        let count = 0;
+        for (let pg = 0; pg < maxPages; pg++) {
+          const res = await fetch(`${cxs}/jobs`, {
+            method: "POST",
+            headers: {
+              "user-agent": UA,
+              accept: "application/json",
+              "content-type": "application/json",
+            },
+            body: JSON.stringify({
+              limit: pageSize,
+              offset: pg * pageSize,
+              searchText,
+              appliedFacets: {},
+            }),
           });
+          if (!res.ok) throw new Error(`POST ${cxs}/jobs → ${res.status}`);
+          const data = (await res.json()) as WdListResp;
+          const batch = data.jobPostings ?? [];
+          for (const j of batch) {
+            count++;
+            const jobId = j.bulletFields?.[0] ?? j.externalPath;
+            if (byId.has(jobId)) continue;
+            byId.set(jobId, {
+              source: key,
+              company: cfg.company,
+              jobId,
+              title: j.title,
+              location: j.locationsText ?? "",
+              url: `${sitePrefix}${j.externalPath}`,
+              detectedAt: now,
+              sourceUrl: `${cxs}/jobs`,
+            });
+          }
+          const total = data.total ?? count;
+          if (batch.length === 0 || count >= total) break;
         }
-        const total = data.total ?? jobs.length;
-        if (batch.length === 0 || jobs.length >= total) break;
       }
-      return jobs;
+      return [...byId.values()];
     },
     async fetchDescription(job) {
       const externalPath = job.url.startsWith(sitePrefix)
@@ -342,33 +369,41 @@ function titleFromSlug(slug: string): string {
 
 function google(cfg: SourceConfig): Fetcher {
   const key = `custom:${cfg.customKey}`;
-  const query = cfg.query ?? { location: "India" };
-  const maxPages = Number(query.maxPages ?? 3);
-  const locationLabel = query.location ?? "India";
+  const queries = queriesOf(cfg, { location: "India" });
   return {
     key,
     company: cfg.company,
     async fetchJobs() {
       const now = nowIso();
-      const found = new Map<string, string>(); // id → slug
-      for (let page = 1; page <= maxPages; page++) {
+      const byId = new Map<string, JobPosting>();
+      for (const query of queries) {
+        const maxPages = Number(query.maxPages ?? 3);
+        const locationLabel = query.location ?? "India";
         const { maxPages: _mp, ...rest } = query;
-        const url = `${GOOGLE_BASE}?${qs({ ...rest, page: String(page) })}`;
-        const html = await getText(url);
-        const before = found.size;
-        for (const m of html.matchAll(GOOGLE_LINK_RE)) found.set(m[1]!, m[2]!);
-        if (found.size === before) break; // no new jobs on this page
+        const found = new Map<string, string>(); // id → slug
+        for (let page = 1; page <= maxPages; page++) {
+          const url = `${GOOGLE_BASE}?${qs({ ...rest, page: String(page) })}`;
+          const html = await getText(url);
+          const before = found.size;
+          for (const m of html.matchAll(GOOGLE_LINK_RE))
+            found.set(m[1]!, m[2]!);
+          if (found.size === before) break; // no new jobs on this page
+        }
+        for (const [id, slug] of found) {
+          if (byId.has(id)) continue;
+          byId.set(id, {
+            source: key,
+            company: cfg.company,
+            jobId: id,
+            title: titleFromSlug(slug),
+            location: locationLabel,
+            url: `${GOOGLE_BASE}/${id}-${slug}?${qs({ location: locationLabel })}`,
+            detectedAt: now,
+            sourceUrl: GOOGLE_BASE,
+          });
+        }
       }
-      return [...found].map(([id, slug]) => ({
-        source: key,
-        company: cfg.company,
-        jobId: id,
-        title: titleFromSlug(slug),
-        location: locationLabel,
-        url: `${GOOGLE_BASE}${id}-${slug}?${qs({ location: locationLabel })}`,
-        detectedAt: now,
-        sourceUrl: GOOGLE_BASE,
-      }));
+      return [...byId.values()];
     },
     async fetchDescription(job) {
       return stripHtml(await getText(job.url));
@@ -411,48 +446,54 @@ type MsJobResp = {
 
 function microsoft(cfg: SourceConfig): Fetcher {
   const key = `custom:${cfg.customKey}`;
-  const query = cfg.query ?? { lc: "India" };
-  const pgSz = Number(query.pgSz ?? 20);
-  const maxPages = Number(query.maxPages ?? 3);
+  const queries = queriesOf(cfg, { lc: "India" });
   return {
     key,
     company: cfg.company,
     async fetchJobs() {
       const now = nowIso();
-      const { pgSz: _ps, maxPages: _mp, ...rest } = query;
-      const base: Record<string, string> = {
-        l: "en_us",
-        o: "Relevance",
-        flt: "true",
-        pgSz: String(pgSz),
-        ...rest,
-      };
-      const jobs: JobPosting[] = [];
-      for (let pg = 1; pg <= maxPages; pg++) {
-        const url = `${MS_SEARCH}?${qs({ ...base, pg: String(pg) })}`;
-        const data = (await getJson(url)) as MsSearchResp;
-        const batch = data.operationResult?.result?.jobs ?? [];
-        if (batch.length === 0) break;
-        for (const j of batch) {
-          jobs.push({
-            source: key,
-            company: cfg.company,
-            jobId: String(j.jobId),
-            title: j.title,
-            location:
-              j.properties?.primaryLocation ??
-              j.properties?.locations?.[0] ??
-              "",
-            url: `${MS_APPLY}/${j.jobId}`,
-            detectedAt: now,
-            postedAt: j.postingDate,
-            sourceUrl: MS_SEARCH,
-          });
+      const byId = new Map<string, JobPosting>();
+      for (const query of queries) {
+        const pgSz = Number(query.pgSz ?? 20);
+        const maxPages = Number(query.maxPages ?? 3);
+        const { pgSz: _ps, maxPages: _mp, ...rest } = query;
+        const base: Record<string, string> = {
+          l: "en_us",
+          o: "Relevance",
+          flt: "true",
+          pgSz: String(pgSz),
+          ...rest,
+        };
+        let count = 0;
+        for (let pg = 1; pg <= maxPages; pg++) {
+          const url = `${MS_SEARCH}?${qs({ ...base, pg: String(pg) })}`;
+          const data = (await getJson(url)) as MsSearchResp;
+          const batch = data.operationResult?.result?.jobs ?? [];
+          if (batch.length === 0) break;
+          for (const j of batch) {
+            count++;
+            const jobId = String(j.jobId);
+            if (byId.has(jobId)) continue;
+            byId.set(jobId, {
+              source: key,
+              company: cfg.company,
+              jobId,
+              title: j.title,
+              location:
+                j.properties?.primaryLocation ??
+                j.properties?.locations?.[0] ??
+                "",
+              url: `${MS_APPLY}/${j.jobId}`,
+              detectedAt: now,
+              postedAt: j.postingDate,
+              sourceUrl: MS_SEARCH,
+            });
+          }
+          const total = data.operationResult?.result?.totalJobs ?? count;
+          if (count >= total) break;
         }
-        const total = data.operationResult?.result?.totalJobs ?? jobs.length;
-        if (jobs.length >= total) break;
       }
-      return jobs;
+      return [...byId.values()];
     },
     async fetchDescription(job) {
       const data = (await getJson(
@@ -491,14 +532,16 @@ type AmznResp = { jobs?: AmznJob[]; hits?: number };
 
 function amazon(cfg: SourceConfig): Fetcher {
   const key = `custom:${cfg.customKey}`;
-  const query = cfg.query ?? { loc_query: "India" };
-  const pageSize = Number(query.result_limit ?? 100);
-  const maxPages = Number(query.maxPages ?? 3);
+  const queries = queriesOf(cfg, { loc_query: "India" });
 
   // The search list payload is the only reliable source of descriptions —
   // amazon.jobs job pages are client-rendered, so scraping them yields nothing.
   // We page through the configured search and yield the raw jobs.
-  async function* search(): AsyncGenerator<AmznJob> {
+  async function* searchOne(
+    query: Record<string, string>,
+  ): AsyncGenerator<AmznJob> {
+    const pageSize = Number(query.result_limit ?? 100);
+    const maxPages = Number(query.maxPages ?? 3);
     const { result_limit: _rl, maxPages: _mp, ...rest } = query;
     const base: Record<string, string> = {
       sort: "recent",
@@ -516,17 +559,23 @@ function amazon(cfg: SourceConfig): Fetcher {
     }
   }
 
+  async function* search(): AsyncGenerator<AmznJob> {
+    for (const query of queries) yield* searchOne(query);
+  }
+
   return {
     key,
     company: cfg.company,
     async fetchJobs() {
       const now = nowIso();
-      const jobs: JobPosting[] = [];
+      const byId = new Map<string, JobPosting>();
       for await (const j of search()) {
-        jobs.push({
+        const jobId = String(j.id_icims);
+        if (byId.has(jobId)) continue;
+        byId.set(jobId, {
           source: key,
           company: cfg.company,
-          jobId: String(j.id_icims),
+          jobId,
           title: j.title,
           location: j.normalized_location ?? j.location ?? "",
           url: `${AMZN_BASE}${j.job_path}`,
@@ -535,7 +584,7 @@ function amazon(cfg: SourceConfig): Fetcher {
           sourceUrl: AMZN_SEARCH,
         });
       }
-      return jobs;
+      return [...byId.values()];
     },
     async fetchDescription(job) {
       for await (const j of search()) {
@@ -555,7 +604,8 @@ function amazon(cfg: SourceConfig): Fetcher {
 // Single public listings endpoint returns every posting with descriptions inline
 // (no detail fetch, no query params — downstream filters do the narrowing).
 //   list: https://www.atlassian.com/endpoint/careers/listings
-const ATLASSIAN_LISTINGS = "https://www.atlassian.com/endpoint/careers/listings";
+const ATLASSIAN_LISTINGS =
+  "https://www.atlassian.com/endpoint/careers/listings";
 
 type AtlassianJob = {
   id: number;
@@ -606,7 +656,8 @@ function atlassian(cfg: SourceConfig): Fetcher {
 // ─── Uber ────────────────────────────────────────────────────────────────────
 // In-house JSON search; descriptions ship inline (markdown). Config query, e.g.
 //   "query": { "q": "software engineer", "maxPages": "3" }
-const UBER_SEARCH = "https://www.uber.com/api/loadSearchJobsResults?localeCode=en";
+const UBER_SEARCH =
+  "https://www.uber.com/api/loadSearchJobsResults?localeCode=en";
 
 type UberJob = {
   id: number;
@@ -626,13 +677,15 @@ function uberLocation(loc: UberJob["location"]): string {
 
 function uber(cfg: SourceConfig): Fetcher {
   const key = `custom:${cfg.customKey}`;
-  const query = cfg.query ?? {};
-  const pageSize = Number(query.limit ?? 100);
-  const maxPages = Number(query.maxPages ?? 3);
+  const queries = queriesOf(cfg);
 
   // Descriptions are inline in the search payload, so re-page the search and
   // match by id when a description is later requested.
-  async function* search(): AsyncGenerator<UberJob> {
+  async function* searchOne(
+    query: Record<string, string>,
+  ): AsyncGenerator<UberJob> {
+    const pageSize = Number(query.limit ?? 100);
+    const maxPages = Number(query.maxPages ?? 3);
     for (let page = 0; page < maxPages; page++) {
       const res = await fetch(UBER_SEARCH, {
         method: "POST",
@@ -656,17 +709,23 @@ function uber(cfg: SourceConfig): Fetcher {
     }
   }
 
+  async function* search(): AsyncGenerator<UberJob> {
+    for (const query of queries) yield* searchOne(query);
+  }
+
   return {
     key,
     company: cfg.company,
     async fetchJobs() {
       const now = nowIso();
-      const jobs: JobPosting[] = [];
+      const byId = new Map<string, JobPosting>();
       for await (const j of search()) {
-        jobs.push({
+        const jobId = String(j.id);
+        if (byId.has(jobId)) continue;
+        byId.set(jobId, {
           source: key,
           company: cfg.company,
-          jobId: String(j.id),
+          jobId,
           title: j.title,
           location: uberLocation(j.location),
           url: `https://www.uber.com/careers/list/${j.id}/`,
@@ -675,7 +734,7 @@ function uber(cfg: SourceConfig): Fetcher {
           sourceUrl: UBER_SEARCH,
         });
       }
-      return jobs;
+      return [...byId.values()];
     },
     async fetchDescription(job) {
       for await (const j of search()) {
@@ -707,45 +766,51 @@ type NetflixResp = { positions?: NetflixJob[]; count?: number };
 
 function netflix(cfg: SourceConfig): Fetcher {
   const key = `custom:${cfg.customKey}`;
-  const query = cfg.query ?? {};
-  const pageSize = Number(query.num ?? 100);
-  const maxPages = Number(query.maxPages ?? 3);
+  const queries = queriesOf(cfg);
   return {
     key,
     company: cfg.company,
     async fetchJobs() {
       const now = nowIso();
-      const jobs: JobPosting[] = [];
-      for (let pg = 0; pg < maxPages; pg++) {
-        const url = `${NETFLIX_API}?${qs({
-          domain: NETFLIX_DOMAIN,
-          start: String(pg * pageSize),
-          num: String(pageSize),
-          query: query.q ?? "",
-        })}`;
-        const data = (await getJson(url)) as NetflixResp;
-        const batch = data.positions ?? [];
-        for (const j of batch) {
-          jobs.push({
-            source: key,
-            company: cfg.company,
-            jobId: String(j.id),
-            title: j.name,
-            location: j.location ?? (j.locations ?? []).join(" / "),
-            url:
-              j.canonicalPositionUrl ??
-              `https://explore.jobs.netflix.net/careers/job/${j.id}`,
-            detectedAt: now,
-            postedAt: j.t_update
-              ? new Date(j.t_update * 1000).toISOString()
-              : undefined,
-            sourceUrl: NETFLIX_API,
-          });
+      const byId = new Map<string, JobPosting>();
+      for (const query of queries) {
+        const pageSize = Number(query.num ?? 100);
+        const maxPages = Number(query.maxPages ?? 3);
+        let count = 0;
+        for (let pg = 0; pg < maxPages; pg++) {
+          const url = `${NETFLIX_API}?${qs({
+            domain: NETFLIX_DOMAIN,
+            start: String(pg * pageSize),
+            num: String(pageSize),
+            query: query.q ?? "",
+          })}`;
+          const data = (await getJson(url)) as NetflixResp;
+          const batch = data.positions ?? [];
+          for (const j of batch) {
+            count++;
+            const jobId = String(j.id);
+            if (byId.has(jobId)) continue;
+            byId.set(jobId, {
+              source: key,
+              company: cfg.company,
+              jobId,
+              title: j.name,
+              location: j.location ?? (j.locations ?? []).join(" / "),
+              url:
+                j.canonicalPositionUrl ??
+                `https://explore.jobs.netflix.net/careers/job/${j.id}`,
+              detectedAt: now,
+              postedAt: j.t_update
+                ? new Date(j.t_update * 1000).toISOString()
+                : undefined,
+              sourceUrl: NETFLIX_API,
+            });
+          }
+          const total = data.count ?? count;
+          if (batch.length === 0 || count >= total) break;
         }
-        const total = data.count ?? jobs.length;
-        if (batch.length === 0 || jobs.length >= total) break;
       }
-      return jobs;
+      return [...byId.values()];
     },
     async fetchDescription(job) {
       const data = (await getJson(

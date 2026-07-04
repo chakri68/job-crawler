@@ -49,7 +49,9 @@ async function main(): Promise<void> {
       const store = new Store();
       const cfg = loadConfig();
       const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-      console.log(renderStatus(cfg, store.listSourceState(), store.stats(since)));
+      console.log(
+        renderStatus(cfg, store.listSourceState(), store.stats(since)),
+      );
       store.close();
       break;
     }
@@ -80,20 +82,31 @@ async function main(): Promise<void> {
     case "purge": {
       const days = numFlag(rest, "--days", 7);
       const dryRun = rest.includes("--dry-run") || rest.includes("-n");
-      const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+      const cutoff = new Date(
+        Date.now() - days * 24 * 60 * 60 * 1000,
+      ).toISOString();
       const store = new Store();
       const victims = store.listPurgeable(cutoff);
       if (victims.length === 0) {
-        console.log(`Nothing to purge (no un-looked-at jobs gone from listings for ${days}d+).`);
+        console.log(
+          `Nothing to purge (no un-looked-at jobs gone from listings for ${days}d+).`,
+        );
       } else if (dryRun) {
-        console.log(`[dry-run] ${victims.length} job(s) would be purged (older than ${days}d, not looked at):`);
+        console.log(
+          `[dry-run] ${victims.length} job(s) would be purged (older than ${days}d, not looked at):`,
+        );
         for (const j of victims.slice(0, 100)) {
-          console.log(`  ${j.id}  ${j.company} — ${j.title}  (last seen ${j.last_seen.slice(0, 10)})`);
+          console.log(
+            `  ${j.id}  ${j.company} — ${j.title}  (last seen ${j.last_seen.slice(0, 10)})`,
+          );
         }
-        if (victims.length > 100) console.log(`  …and ${victims.length - 100} more`);
+        if (victims.length > 100)
+          console.log(`  …and ${victims.length - 100} more`);
       } else {
         const n = store.purgeJobs(cutoff);
-        console.log(`Purged ${n} stale job(s) (older than ${days}d, not looked at).`);
+        console.log(
+          `Purged ${n} stale job(s) (older than ${days}d, not looked at).`,
+        );
       }
       store.close();
       break;
@@ -108,7 +121,9 @@ async function main(): Promise<void> {
         });
         child.on("exit", (c) => resolve(c ?? 0));
         child.on("error", (err) => {
-          console.error(`Failed to run deploy script: ${(err as Error).message}`);
+          console.error(
+            `Failed to run deploy script: ${(err as Error).message}`,
+          );
           resolve(1);
         });
       });

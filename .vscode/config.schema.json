@@ -81,6 +81,49 @@
     }
   },
   "definitions": {
+    "queryParams": {
+      "type": "object",
+      "description": "One set of query params passed to the source. All values are strings.",
+      "additionalProperties": { "type": "string" },
+      "properties": {
+        "q": {
+          "type": "string",
+          "description": "Keyword/search term (google, microsoft, uber, netflix, workday searchText)."
+        },
+        "location": {
+          "type": "string",
+          "description": "Location filter for the Google results page (e.g. \"India\")."
+        },
+        "lc": {
+          "type": "string",
+          "description": "Location/country filter for Microsoft search (e.g. \"India\")."
+        },
+        "pgSz": {
+          "type": "string",
+          "description": "Microsoft page size per request (e.g. \"20\")."
+        },
+        "loc_query": {
+          "type": "string",
+          "description": "Amazon location filter (e.g. \"India\")."
+        },
+        "base_query": {
+          "type": "string",
+          "description": "Amazon keyword/search term (e.g. \"software engineer\")."
+        },
+        "dc": {
+          "type": "string",
+          "description": "Workday datacenter from the careers host, e.g. \"wd5\" in tenant.wd5.myworkdayjobs.com. Structural — taken from the first query when an array is given."
+        },
+        "site": {
+          "type": "string",
+          "description": "Workday career-site id, e.g. \"External_Career_Site\". Structural — taken from the first query when an array is given."
+        },
+        "maxPages": {
+          "type": "string",
+          "description": "Max pages to page through. e.g. \"3\"."
+        }
+      }
+    },
     "source": {
       "type": "object",
       "additionalProperties": false,
@@ -88,7 +131,14 @@
       "properties": {
         "provider": {
           "description": "Fetcher type. ATS providers (greenhouse/lever/ashby/smartrecruiters) need a \"board\"; \"workday\" uses \"board\" as the tenant plus query.dc/query.site; \"custom\" needs a \"customKey\".",
-          "enum": ["greenhouse", "lever", "ashby", "smartrecruiters", "workday", "custom"]
+          "enum": [
+            "greenhouse",
+            "lever",
+            "ashby",
+            "smartrecruiters",
+            "workday",
+            "custom"
+          ]
         },
         "board": {
           "type": "string",
@@ -106,50 +156,24 @@
         "customKey": {
           "description": "For provider \"custom\": which built-in custom fetcher to use.",
           "type": "string",
-          "examples": ["google", "microsoft", "amazon", "atlassian", "uber", "netflix"]
+          "examples": [
+            "google",
+            "microsoft",
+            "amazon",
+            "atlassian",
+            "uber",
+            "netflix"
+          ]
         },
         "query": {
-          "type": "object",
-          "description": "Query params passed to the source (provider \"custom\" and \"workday\"). All values are strings.",
-          "additionalProperties": { "type": "string" },
-          "properties": {
-            "q": {
-              "type": "string",
-              "description": "Keyword/search term (google, microsoft, uber, netflix, workday searchText)."
-            },
-            "location": {
-              "type": "string",
-              "description": "Location filter for the Google results page (e.g. \"India\")."
-            },
-            "lc": {
-              "type": "string",
-              "description": "Location/country filter for Microsoft search (e.g. \"India\")."
-            },
-            "pgSz": {
-              "type": "string",
-              "description": "Microsoft page size per request (e.g. \"20\")."
-            },
-            "loc_query": {
-              "type": "string",
-              "description": "Amazon location filter (e.g. \"India\")."
-            },
-            "base_query": {
-              "type": "string",
-              "description": "Amazon keyword/search term (e.g. \"software engineer\")."
-            },
-            "dc": {
-              "type": "string",
-              "description": "Workday datacenter from the careers host, e.g. \"wd5\" in tenant.wd5.myworkdayjobs.com."
-            },
-            "site": {
-              "type": "string",
-              "description": "Workday career-site id, e.g. \"External_Career_Site\"."
-            },
-            "maxPages": {
-              "type": "string",
-              "description": "Max pages to page through. e.g. \"3\"."
+          "description": "Query params passed to the source (provider \"custom\" and \"workday\"). A single search object, or an array of search objects whose results are merged and de-duplicated by job id.",
+          "oneOf": [
+            { "$ref": "#/definitions/queryParams" },
+            {
+              "type": "array",
+              "items": { "$ref": "#/definitions/queryParams" }
             }
-          }
+          ]
         }
       },
       "allOf": [
@@ -157,7 +181,13 @@
           "if": {
             "properties": {
               "provider": {
-                "enum": ["greenhouse", "lever", "ashby", "smartrecruiters", "workday"]
+                "enum": [
+                  "greenhouse",
+                  "lever",
+                  "ashby",
+                  "smartrecruiters",
+                  "workday"
+                ]
               }
             }
           },

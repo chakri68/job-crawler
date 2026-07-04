@@ -2,7 +2,8 @@
 
 Watches official company career pages (API-first) and alerts on new matching
 jobs. On demand, tailors a base resume to a specific job with a headless Claude
-Code instance and renders a PDF.
+Code instance and renders a PDF. An interactive TUI lets you browse jobs, tailor
+them, and track each one through your pipeline (`new` → `applied` / `rejected`).
 
 See [`design.md`](./design.md) for the full design.
 
@@ -68,10 +69,11 @@ npm unlink -g job-cron        # or: npm rm -g job-cron
 ```
 
 Caveats / alternatives:
-- **nvm:** the link lives in the *current* Node version's bin dir. After
+
+- **nvm:** the link lives in the _current_ Node version's bin dir. After
   `nvm use <other-version>`, re-run `npm link` under that version to restore it.
 - Prefer `npm link` over `npm install -g .` while you're still editing:
-  `install -g` copies a *snapshot* into the global dir, so `data/jobs.db` would
+  `install -g` copies a _snapshot_ into the global dir, so `data/jobs.db` would
   live there and local edits wouldn't apply until you reinstall.
 - A shell alias is a lighter-weight option:
   `alias job-cron='node ~/Repos/personal_projects/job-cron/src/cli.ts'`.
@@ -119,15 +121,33 @@ deploy command still succeeds.
 `job-cron tui` (or just `job-cron` with no command) opens a full-screen browser
 (built on `blessed`):
 
-- **Left** — scrollable jobs list (`●` = seen in the last 24h).
-- **Right** — full details for the selected job (source, seen/posted time, alert
-  status, id, apply URL).
-- **Top** — live counts: jobs, new (24h), and source health.
+- **Left** — scrollable jobs list. The leading marker is `●` (seen in the last
+  24h), `✓` (applied), or `✗` (rejected).
+- **Right** — full details for the selected job (status, source, seen/posted
+  time, alert status, id, apply URL).
+- **Top** — live counts: jobs, new (24h), applied, rejected, and source health.
 
 Keys: `j/k` (or arrows) move · `enter`/`o` open the apply URL in your browser ·
-`t` tailor the selected job (drops into the `tailor` flow) · `d` dismiss the
-selected job (asks to confirm; `y` dismisses, `n`/`esc` cancels) · `s` toggle the
-source-health panel · `/` filter by company/title/location · `q` quit.
+`t` tailor the selected job (opens a modal, see below) · `a` mark applied ·
+`x` mark rejected · `f`/`Tab` cycle the status filter (`Shift-Tab` reverse) ·
+`d` dismiss the selected job (asks to confirm; `y` dismisses, `n`/`esc` cancels) ·
+`r` run all sources now · `s` toggle the source-health panel ·
+`/` filter by company/title/location · `q` quit.
+
+**Tailoring modal.** Pressing `t` opens a modal that streams the `tailor` logs
+live and, when the run finishes, shows the generated PDF path. It can't be
+dismissed while tailoring is in progress; once done, `enter` opens the job's
+apply URL and `esc` closes the modal.
+
+**Job status / pipeline.** Every job carries a status — `new` by default, which
+you move to `applied` (`a`) or `rejected` (`x`); pressing the same key again
+clears it back to `new`. The status shows as the list marker (`✓`/`✗`), a line in
+the details pane, and a count in the header. Cycle the list through
+`all → new → applied → rejected` with `f`/`Tab` (`Shift-Tab` to go back) to focus
+one bucket; the active filter shows in the list's title and composes with `/`
+search. Like `tailor`, marking a job `applied`/`rejected` **exempts it from
+purge** (see below). Statuses also surface in `job-cron list` via the same
+`● ✓ ✗` markers.
 
 Dismissing is a **soft delete**: the row is kept as a tombstone (marked
 `dismissed`) and hidden from all listings/counts, so a job you dismiss never
@@ -149,8 +169,9 @@ job-cron purge --days 14     # custom window
 ```
 
 Two safety rules:
-- A job counts as "looked at" once you run `tailor` on it — those are **never**
-  purged.
+
+- A job counts as "looked at" once you run `tailor` on it, and any job you've
+  marked `applied` or `rejected` is likewise engaged — those are **never** purged.
 - "Old" is measured by `last_seen` (last poll the job still appeared), not when
   it was first found. A role that's still posted keeps getting refreshed and is
   never purged — deleting a live job would make it look new and **re-alert** you.
@@ -176,8 +197,13 @@ via `query`. Find them in any Workday careers URL
 (`https://{tenant}.{dc}.myworkdayjobs.com/{site}`):
 
 ```json
-{ "provider": "workday", "board": "nvidia", "company": "NVIDIA", "enabled": true,
-  "query": { "dc": "wd5", "site": "NVIDIAExternalCareerSite", "maxPages": "5" } }
+{
+  "provider": "workday",
+  "board": "nvidia",
+  "company": "NVIDIA",
+  "enabled": true,
+  "query": { "dc": "wd5", "site": "NVIDIAExternalCareerSite", "maxPages": "5" }
+}
 ```
 
 In-house sources use the `CUSTOM` registry in `src/fetchers/index.ts`. **Google**,
@@ -212,6 +238,27 @@ search payload, since its job pages are client-rendered). Atlassian returns ever
 posting (with descriptions) from one listings endpoint — filtering happens
 downstream, so it takes no `query`. Uber and Netflix use their in-house JSON
 search APIs. Add more by writing a fetcher and registering it.
+
+Every source that takes a `query` (all the `custom` fetchers plus `workday`) also
+accepts an **array of queries** — several searches run in one poll and their
+results are merged, de-duplicated by job id. Use it to cover multiple search
+terms or locations from one board:
+
+```json
+{
+  "provider": "custom",
+  "customKey": "google",
+  "company": "Google",
+  "enabled": true,
+  "query": [
+    { "location": "India", "q": "software engineer", "maxPages": "3" },
+    { "location": "India", "q": "backend engineer", "maxPages": "3" }
+  ]
+}
+```
+
+For `workday`, the structural `dc`/`site` are read from the first query; only the
+`q`/`maxPages` search params vary across the array.
 
 ## Resume tailoring
 
@@ -254,6 +301,7 @@ step creates a template there. Without a webhook, alerts go to the journal
 (`job-cron deploy logs`).
 
 Notes:
+
 - **Laptop caveat:** the timer can't fire while the machine is asleep/off.
   `Persistent=true` catches up on the next wake (no lost state), but you'll miss
   polls during sleep. For true 24/7 hourly, run the same script on an always-on
