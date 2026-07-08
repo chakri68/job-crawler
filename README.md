@@ -1,11 +1,20 @@
 # job-cron
 
-Watches official company career pages (API-first) and alerts on new matching
-jobs. On demand, tailors a base resume to a specific job with a headless Claude
-Code instance and renders a PDF. An interactive TUI lets you browse jobs, tailor
-them, and track each one through your pipeline (`new` → `applied` / `rejected`).
+The early bird gets the job. Aggregators are slow, noisy, and weeks behind — so
+this skips them and watches company career pages straight from the source
+(API-first, no scraping where an API exists). New role matches your filters? It
+pings you before the listing has time to get stale.
 
-See [`design.md`](./design.md) for the full design.
+On demand it'll tailor your base resume to a specific job — a headless Claude
+Code instance reorders and rephrases toward the posting, strictly from facts
+already in the base (no inventing a PhD you don't have), then spits out a PDF.
+
+An interactive TUI ties it together: browse jobs, tailor them, and shove each one
+through your pipeline (`new` → `applied` / `rejected`) without leaving the
+terminal.
+
+Basically a personal job-hunt cron that yells at you when something worth
+applying to shows up.
 
 ## Requirements
 
@@ -21,11 +30,11 @@ cp config.example.json config.json   # then edit sources/filters
 cp .env.example .env                 # then fill in your webhook/bot secrets
 ```
 
-Secrets are read from a `.env` file in the project root (loaded automatically at
-startup via Node's built-in `process.loadEnvFile` — no dependency). Real shell
-environment variables still take precedence, so you can also just
-`export DISCORD_WEBHOOK_URL=...` instead. Without any of these, alerts fall back
-to the console.
+Secrets live in a `.env` file in the project root — loaded automatically at
+startup via Node's built-in `process.loadEnvFile`, so no `dotenv`, no extra
+dependency, nothing. Real shell env vars still win, so `export
+DISCORD_WEBHOOK_URL=...` works just as well. Skip all of it and alerts just print
+to the console — nothing breaks, you just have to go look for them.
 
 ### Notifiers
 
@@ -111,10 +120,10 @@ job-cron deploy print        # preview the unit files without installing
 job-cron deploy uninstall    # stop + remove (keeps your DB and config)
 ```
 
-`install` and `uninstall` each send a one-off alert through your configured
-notifier (✅ on install, 🛑 on uninstall), so you have a record of when scheduled
-polling started and stopped. It's best-effort — if no webhook/token is set, the
-deploy command still succeeds.
+`install` and `uninstall` each fire a one-off alert through your configured
+notifier (✅ on install, 🛑 on uninstall), so future-you has a paper trail of when
+the cron was actually running. Best-effort — no webhook set, no alert, and the
+deploy still goes through fine.
 
 ### Interactive TUI
 
@@ -154,8 +163,9 @@ Dismissing is a **soft delete**: the row is kept as a tombstone (marked
 re-alerts and never comes back on the next `run`, even while it's still live on
 the career page.
 
-First run per source is **seed mode**: existing jobs are recorded silently (no
-alert flood). Alerts only fire on jobs that appear afterwards.
+First run per source is **seed mode**: everything already posted gets recorded
+silently, so you don't get blasted with 200 alerts for jobs that have been up for
+weeks. Only roles that show up _after_ that first poll actually ping you.
 
 ### Purging old jobs
 
@@ -182,7 +192,9 @@ self-cleans.
 
 ## Adding companies
 
-Most companies use an ATS with a public JSON API. Add a config entry — usually no code:
+Good news: most companies don't build their own careers page, they rent an ATS —
+and those all have a public JSON API. So adding a company is usually just a config
+entry, no code:
 
 ```json
 { "provider": "greenhouse",      "board": "stripe",   "company": "Stripe",   "enabled": true }
@@ -239,6 +251,13 @@ posting (with descriptions) from one listings endpoint — filtering happens
 downstream, so it takes no `query`. Uber and Netflix use their in-house JSON
 search APIs. Add more by writing a fetcher and registering it.
 
+> **Heads up — Microsoft and Netflix are flaky.** The config entries are here and
+> the fetchers exist, but I never got either fully reliable. Microsoft's
+> `gcsservices` backend is fussy about headers/params and likes to hand back
+> empty pages or bot-challenge you.
+> Treat both as experimental — they might just work for you, they might return
+> nothing. Everything else in this list is solid; those two are the finicky ones.
+
 Every source that takes a `query` (all the `custom` fetchers plus `workday`) also
 accepts an **array of queries** — several searches run in one poll and their
 results are merged, de-duplicated by job id. Use it to cover multiple search
@@ -262,19 +281,37 @@ For `workday`, the structural `dc`/`site` are read from the first query; only th
 
 ## Resume tailoring
 
-`tailor` reads `resumes/base.json` (the source of truth), asks `claude -p` to
-reorder/rephrase it toward the job — **using only facts already in the base** —
-validates the result isn't fabricated, then renders a PDF via
-`bin/resume-pdf.mjs`.
+`tailor` reads `resumes/base.json` (the one source of truth) and hands it to
+`claude -p` to reorder and rephrase toward the job — **using only facts already
+in the base**. Then it double-checks the model didn't quietly hallucinate you a
+new job title or a degree you never earned, and only then renders the PDF via
+`bin/resume-pdf.mjs`. Tailor, not fabricate.
 
-PDF rendering uses the `resume-to-pdf` CLI (`resume-to-pdf <json> -o <pdf>`) by
-default. Override with `RESUME_PDF_CLI` — e.g. `RESUME_PDF_CLI=./bin/resume-pdf.mjs`
-to use the bundled HTML fallback renderer (handy when `resume-to-pdf` isn't installed).
+### The renderer
+
+The default renderer is [`resume-to-pdf`](https://github.com/chakri68/resume) —
+my own CLI (`resume-to-pdf <json> -o <pdf>`). It doesn't lay out a PDF from
+scratch; it spins up headless Chrome (Puppeteer), feeds the JSON into my live
+resume site at [resume.chakri.me](https://resume.chakri.me), and prints the
+rendered page. So the tailored PDF comes out looking exactly like my real web
+resume — same template, one source of styling — instead of some parallel
+PDF-only theme I'd have to keep in sync. The tradeoff: it needs Chrome and a
+network round-trip to the site.
+
+Not me? You've got two ways out:
+
+- Point `RESUME_PDF_CLI` at your own renderer. Anything that takes
+  `<input.json> -o <output.pdf>` drops in — swap in your own site URL via
+  `resume-to-pdf`'s `-u` flag, or a completely different tool.
+- Fall back to the bundled `bin/resume-pdf.mjs` with
+  `RESUME_PDF_CLI=./bin/resume-pdf.mjs` — a zero-dependency HTML renderer that
+  needs no external CLI, no Chrome, no network. Uglier, but it always works.
 
 ## Hosting
 
-Two options. **Local is recommended** for this project (home IP keeps the Google
-fetcher happy, the DB stays off git, and `tailor` lives in the same place).
+Two options, and **local wins** for this one. Your home IP keeps the Google
+fetcher from getting bot-challenged, the DB stays off git where it belongs, and
+`tailor` needs your local `claude` anyway — so it all lives in one place.
 
 ### Recommended: local systemd timer
 
@@ -313,7 +350,8 @@ Notes:
 ### Alternative: GitHub Actions
 
 `.github/workflows/hourly.yml` runs hourly and commits the SQLite state back to
-the repo. Set the `DISCORD_WEBHOOK_URL` repo secret. Trade-offs to know:
+the repo — someone else's always-on box, technically free. Set the
+`DISCORD_WEBHOOK_URL` repo secret. The catches, because there are a few:
 
 - **Use a private repo** — the committed `data/jobs.db` would otherwise publish
   your watch history (and bloats git history regardless).
